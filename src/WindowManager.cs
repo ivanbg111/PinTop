@@ -61,9 +61,7 @@ namespace PinTop
             bool hasButtons = (style & (Native.WS_SYSMENU | Native.WS_MINIMIZEBOX | Native.WS_MAXIMIZEBOX)) != 0;
             if (!hasCaption && !hasButtons) return false;
 
-            int cloaked;
-            if (Native.DwmGetWindowAttribute(hwnd, Native.DWMWA_CLOAKED, out cloaked, sizeof(int)) == 0 && cloaked != 0)
-                return false;
+            if (IsCloaked(hwnd)) return false;
 
             Native.RECT frame = GetFrame(hwnd);
             if (frame.Width < 160 || frame.Height < 60) return false;
@@ -71,6 +69,13 @@ namespace PinTop
             // Juegos/vídeos a pantalla completa: sin barra de título y ocupando todo el monitor.
             if (!hasCaption && IsFullscreen(hwnd, frame)) return false;
             return true;
+        }
+
+        /// <summary>Ventana oculta por Windows (otro escritorio virtual, app suspendida...).</summary>
+        public static bool IsCloaked(IntPtr hwnd)
+        {
+            int cloaked;
+            return Native.DwmGetWindowAttribute(hwnd, Native.DWMWA_CLOAKED, out cloaked, sizeof(int)) == 0 && cloaked != 0;
         }
 
         /// <summary>Borde visible de la ventana en píxeles de pantalla (sin la sombra invisible).</summary>
@@ -142,6 +147,18 @@ namespace PinTop
                 Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE | Native.SWP_NOOWNERZORDER);
             if (!ok) return;
             if (pin) pinnedByUs.Add(hwnd); else pinnedByUs.Remove(hwnd);
+        }
+
+        /// <summary>Ventanas que PinTop ha fijado y siguen fijadas (limpia las cerradas o soltadas por la app).</summary>
+        public static List<IntPtr> PinnedWindows()
+        {
+            var result = new List<IntPtr>();
+            foreach (IntPtr hwnd in new List<IntPtr>(pinnedByUs))
+            {
+                if (Native.IsWindow(hwnd) && IsPinned(hwnd)) result.Add(hwnd);
+                else pinnedByUs.Remove(hwnd);
+            }
+            return result;
         }
 
         public static void UnpinAll()

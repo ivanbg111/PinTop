@@ -24,8 +24,11 @@ namespace PinTop
         /// <summary>Rango permitido para la X izquierda del botón al arrastrarlo.</summary>
         public int DragMin, DragMax;
 
-        public event EventHandler PinClicked;
-        public event Action<int> DragEnded;
+        /// <summary>Ventana a la que pertenece este botón.</summary>
+        public IntPtr Target;
+
+        public event Action<PinButton> PinClicked;
+        public event Action<PinButton, int> DragEnded;
 
         public PinButton()
         {
@@ -33,7 +36,6 @@ namespace PinTop
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.Manual;
             AutoScaleMode = AutoScaleMode.None;
-            TopMost = true;
             DoubleBuffered = true;
             BackColor = baseColor;
             Text = "PinTop";
@@ -54,7 +56,7 @@ namespace PinTop
             get
             {
                 CreateParams cp = base.CreateParams;
-                cp.ExStyle |= Native.WS_EX_TOOLWINDOW | Native.WS_EX_NOACTIVATE | Native.WS_EX_TOPMOST;
+                cp.ExStyle |= Native.WS_EX_TOOLWINDOW | Native.WS_EX_NOACTIVATE;
                 return cp;
             }
         }
@@ -85,8 +87,12 @@ namespace PinTop
             Invalidate();
         }
 
-        /// <summary>Coloca el botón en <paramref name="bounds"/> (pantalla) por encima de todo.</summary>
-        public void ShowAt(Rectangle bounds, bool isPinned)
+        /// <summary>
+        /// Coloca el botón en <paramref name="bounds"/> (pantalla), en la pila de ventanas justo
+        /// detrás de <paramref name="insertAfter"/>: es decir, justo encima de su ventana. Así no
+        /// flota por encima de otras ventanas que la tapen.
+        /// </summary>
+        public void ShowAt(Rectangle bounds, bool isPinned, IntPtr insertAfter)
         {
             if (dragging) return;
             if (isPinned != pinned)
@@ -95,13 +101,26 @@ namespace PinTop
                 UpdateTooltip();
                 Invalidate();
             }
-            // Se reafirma siempre HWND_TOPMOST: al fijar una ventana, esta pasa por delante del botón.
-            Native.SetWindowPos(Handle, Native.HWND_TOPMOST, bounds.X, bounds.Y, bounds.Width, bounds.Height,
-                Native.SWP_NOACTIVATE);
+            // El botón está siempre en la capa "siempre visible"; dentro de ella, justo donde le toca.
+            if ((Native.GetWindowLong(Handle, Native.GWL_EXSTYLE) & Native.WS_EX_TOPMOST) == 0)
+                Native.SetWindowPos(Handle, Native.HWND_TOPMOST, 0, 0, 0, 0,
+                    Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
             if (!shown)
             {
+                // Primero se coloca (aún oculto) y se muestra; después se fija su lugar en la pila.
+                Native.SetWindowPos(Handle, insertAfter, bounds.X, bounds.Y, bounds.Width, bounds.Height, Native.SWP_NOACTIVATE);
                 Native.ShowWindow(Handle, Native.SW_SHOWNOACTIVATE);
                 shown = true;
+            }
+            Native.SetWindowPos(Handle, insertAfter, bounds.X, bounds.Y, bounds.Width, bounds.Height,
+                Native.SWP_NOACTIVATE);
+
+            // Red de seguridad: si Windows lo sacó de la capa "siempre visible", devolverlo.
+            if ((Native.GetWindowLong(Handle, Native.GWL_EXSTYLE) & Native.WS_EX_TOPMOST) == 0)
+            {
+                Debug.Log("zorder fallback target=" + Target + " after=" + insertAfter);
+                Native.SetWindowPos(Handle, Native.HWND_TOPMOST, 0, 0, 0, 0,
+                    Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
             }
         }
 
@@ -147,7 +166,7 @@ namespace PinTop
                 back = hover ? Theme.Blend(baseColor, ink, 0.14f) : baseColor;
             }
             e.Graphics.Clear(back);
-            Glyphs.DrawPin(e.Graphics, new RectangleF(0, 0, ClientSize.Width, ClientSize.Height), ink, pinned);
+            Glyphs.DrawPinIcon(e.Graphics, new Rectangle(Point.Empty, ClientSize), ink, back, pinned);
         }
 
         protected override void OnMouseEnter(EventArgs e)
@@ -204,11 +223,11 @@ namespace PinTop
             {
                 dragging = false;
                 Cursor = Cursors.Default;
-                if (DragEnded != null) DragEnded(Bounds.Left);
+                if (DragEnded != null) DragEnded(this, Bounds.Left);
             }
             else if (ClientRectangle.Contains(e.Location) && PinClicked != null)
             {
-                PinClicked(this, EventArgs.Empty);
+                PinClicked(this);
             }
         }
 

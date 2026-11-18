@@ -11,6 +11,10 @@ flotando mientras rellenas datos en otra a pantalla completa, sin pantalla divid
 ## Funciones
 
 - **Botón de chincheta** junto a minimizar / maximizar / cerrar de la ventana activa.
+  - **Cada ventana fijada mantiene su botón siempre visible** (aunque no sea la activa), así
+    puedes tener 2 o 20 ventanas encima y soltar cualquiera sin tener que activarla antes.
+  - Si otra ventana tapa la barra de título, el botón queda tapado también (no flota por encima).
+  - Usa la misma fuente de iconos que los botones de Windows 11, así que se ve nítido.
   - Toma el color de la barra de título de cada app para integrarse.
   - Al fijar la ventana se pinta con el **color de acento de Windows**.
   - Busca un hueco libre: no tapa los iconos propios de apps como Claude, Chrome o Bambu Studio.
@@ -86,7 +90,8 @@ La posición del botón se decide así:
 
 - Las ventanas de programas ejecutados **como administrador** solo se pueden fijar si PinTop
   también se ejecuta como administrador (restricción de seguridad de Windows).
-- Si otra ventana "siempre visible" tapa la barra de título, el botón se coloca a su izquierda.
+- Si al calcular la posición otra ventana "siempre visible" tapa la barra de título, el botón se
+  coloca a su izquierda (puedes arrastrarlo o usar "Volver a la posición automática").
 - Algunas ventanas que ya usan transparencia propia no admiten el cambio de opacidad.
 - No se muestra en juegos o vídeos a pantalla completa.
 

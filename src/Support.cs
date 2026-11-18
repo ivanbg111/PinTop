@@ -141,9 +141,49 @@ namespace PinTop
         }
     }
 
-    /// <summary>Dibujo vectorial de la chincheta (se ve nítida a cualquier tamaño y DPI).</summary>
+    /// <summary>Dibujo de la chincheta.</summary>
     internal static class Glyphs
     {
+        // Misma fuente que usa Windows 11 para minimizar/maximizar/cerrar: se ve nítida
+        // porque el texto GDI se ajusta a la rejilla de píxeles.
+        static readonly string IconFont = PickIconFont();
+        static Font cachedFont;
+        static int cachedFontSize;
+
+        static string PickIconFont()
+        {
+            using (var fonts = new System.Drawing.Text.InstalledFontCollection())
+            {
+                string fallback = null;
+                foreach (FontFamily f in fonts.Families)
+                {
+                    if (f.Name == "Segoe Fluent Icons") return f.Name;
+                    if (f.Name == "Segoe MDL2 Assets") fallback = f.Name;
+                }
+                return fallback;
+            }
+        }
+
+        /// <summary>Chincheta para el botón: glifo de fuente nítido; si no hay fuente, dibujo vectorial.</summary>
+        public static void DrawPinIcon(Graphics g, Rectangle box, Color ink, Color back, bool pinned)
+        {
+            if (IconFont == null)
+            {
+                DrawPin(g, box, ink, pinned);
+                return;
+            }
+            int px = Math.Max(10, (int)Math.Round(box.Height * 0.6));
+            if (cachedFont == null || cachedFontSize != px)
+            {
+                if (cachedFont != null) cachedFont.Dispose();
+                cachedFont = new Font(IconFont, px, GraphicsUnit.Pixel);
+                cachedFontSize = px;
+            }
+            TextRenderer.DrawText(g, pinned ? "" : "", cachedFont, box, ink, back,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding
+                | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
+        }
+
         // Chincheta vertical en una caja de 16x16; luego se inclina 45°.
         static readonly PointF[] PinOutline =
         {

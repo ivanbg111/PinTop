@@ -8,8 +8,8 @@ using Timer = System.Windows.Forms.Timer;
 namespace PinTop
 {
     /// <summary>
-    /// Núcleo de la app: icono de bandeja, seguimiento de la ventana activa,
-    /// colocación del botón flotante y atajos de teclado globales.
+    /// Núcleo de la app: icono de bandeja, seguimiento de ventanas, un botón flotante por
+    /// ventana (la activa + todas las fijadas) y atajos de teclado globales.
     /// </summary>
     internal sealed class TrayApp : ApplicationContext
     {
@@ -20,6 +20,7 @@ namespace PinTop
             public int FromRight, FromTop, Size;
             public bool FromUia;
             public string App;
+            public Color Background;
         }
 
         public const string ShowSettingsEvent = "PinTop.ShowSettings";
@@ -27,7 +28,7 @@ namespace PinTop
 
         readonly Settings settings;
         readonly NotifyIcon tray;
-        readonly PinButton button;
+        readonly Control invoker = new Control();   // para volver al hilo de la interfaz
         readonly ContextMenuStrip buttonMenu;
         readonly HotkeyWindow hotkeys;
         readonly CaptionProbe probe;
@@ -40,37 +41,29 @@ namespace PinTop
         readonly List<RegisteredWaitHandle> waits = new List<RegisteredWaitHandle>();
         readonly List<WaitHandle> signals = new List<WaitHandle>();
         readonly Dictionary<IntPtr, Placement> placements = new Dictionary<IntPtr, Placement>();
+        readonly Dictionary<IntPtr, PinButton> buttons = new Dictionary<IntPtr, PinButton>();
+        readonly Stack<PinButton> spareButtons = new Stack<PinButton>();
+        readonly HashSet<IntPtr> buttonHandles = new HashSet<IntPtr>();
         readonly ToolStripMenuItem showButtonItem;
         SettingsForm settingsForm;
 
-        IntPtr target = IntPtr.Zero;       // ventana sobre la que está (o estará) el botón
-        Placement current;                 // colocación activa del botón
         IntPtr pendingHwnd = IntPtr.Zero;  // ventana cuya colocación se está calculando
         Size pendingSize;
         int ticket;
         Rectangle? probeResult;
         IntPtr menuTarget = IntPtr.Zero;
+        string hotkeyText = "";
 
         public TrayApp()
         {
             settings = Settings.Load();
             try { Startup.RefreshPath(); } catch (Exception) { }
 
-            button = new PinButton();
-            button.PinClicked += delegate { TogglePin(target); };
-            button.DragEnded += OnDragEnded;
+            invoker.CreateControl();
             buttonMenu = BuildButtonMenu();
-            button.ContextMenuStrip = buttonMenu;
 
             probe = new CaptionProbe();
-            probe.Completed += (t, hwnd, result) =>
-            {
-                try
-                {
-                    if (!button.IsDisposed) button.BeginInvoke(new Action(() => OnProbeResult(t, result)));
-                }
-                catch (InvalidOperationException) { }
-            };
+            probe.Completed += (t, hwnd, result) => Post(() => OnProbeResult(t, hwnd, result));
 
             showButtonItem = new ToolStripMenuItem("Mostrar el botón en las ventanas", null, delegate { SetShowButton(!settings.ShowButton); });
             showButtonItem.Checked = settings.ShowButton;
@@ -105,7 +98,7 @@ namespace PinTop
             AddHook(Native.EVENT_OBJECT_DESTROY, Native.EVENT_OBJECT_HIDE);
             AddHook(Native.EVENT_OBJECT_LOCATIONCHANGE, Native.EVENT_OBJECT_LOCATIONCHANGE);
 
-            // Red de seguridad por si se pierde algún evento.
+            // Red de seguridad por si se pierde algún evento (y para reordenar capas).
             syncTimer.Interval = 250;
             syncTimer.Tick += delegate { Sync(); };
             syncTimer.Start();
@@ -131,6 +124,15 @@ namespace PinTop
             }
             if (failed.Count > 0) WarnHotkeys(failed);
             Sync();
+        }
+
+        void Post(Action action)
+        {
+            try
+            {
+                if (!invoker.IsDisposed) invoker.BeginInvoke(action);
+            }
+            catch (InvalidOperationException) { }
         }
 
         // ───────────────────────────── Menús ─────────────────────────────
@@ -162,16 +164,119 @@ namespace PinTop
 
             menu.Opening += (s, e) =>
             {
-                menuTarget = target;
+                var source = menu.SourceControl as PinButton;
+                menuTarget = source != null ? source.Target : IntPtr.Zero;
                 if (!Native.IsWindow(menuTarget)) { e.Cancel = true; return; }
                 pinItem.Text = WindowManager.IsPinned(menuTarget) ? "Soltar ventana" : "Fijar encima de todo";
                 int currentPercent = (int)Math.Round(WindowManager.GetOpacity(menuTarget) * 100 / 255.0);
                 foreach (ToolStripMenuItem item in opacityItems)
                     item.Checked = Math.Abs((int)item.Tag - currentPercent) < 5;
-                string app = current != null ? current.App : null;
-                resetItem.Enabled = app != null && settings.Offsets.ContainsKey(app);
+                Placement placement;
+                placements.TryGetValue(menuTarget, out placement);
+                resetItem.Enabled = placement != null && placement.App != null && settings.Offsets.ContainsKey(placement.App);
             };
             return menu;
+        }
+
+        // ───────────────────────────── Botones ─────────────────────────────
+
+        PinButton ButtonFor(IntPtr hwnd)
+        {
+            PinButton b;
+            if (buttons.TryGetValue(hwnd, out b)) return b;
+            if (spareButtons.Count > 0)
+            {
+                b = spareButtons.Pop();
+            }
+            else
+            {
+                b = new PinButton();
+                b.PinClicked += sender => TogglePin(sender.Target);
+                b.DragEnded += OnDragEnded;
+                b.ContextMenuStrip = buttonMenu;
+                buttonHandles.Add(b.Handle);
+            }
+            b.Target = hwnd;
+            b.SetHotkeyText(hotkeyText);
+            buttons[hwnd] = b;
+            return b;
+        }
+
+        void ReleaseButton(IntPtr hwnd)
+        {
+            PinButton b;
+            if (!buttons.TryGetValue(hwnd, out b)) return;
+            b.HideButton();
+            b.Target = IntPtr.Zero;
+            buttons.Remove(hwnd);
+            if (spareButtons.Count < 4)
+            {
+                spareButtons.Push(b);
+            }
+            else
+            {
+                buttonHandles.Remove(b.Handle);
+                b.Close();
+                b.Dispose();
+            }
+        }
+
+        void ReleaseAllButtons()
+        {
+            foreach (IntPtr hwnd in new List<IntPtr>(buttons.Keys)) ReleaseButton(hwnd);
+        }
+
+        /// <summary>
+        /// La ventana más cercana por encima de <paramref name="hwnd"/> que de verdad tapa la zona
+        /// del botón (o Zero). Se ignoran nuestras ventanas, las invisibles, las transparentes al
+        /// ratón y las auxiliares del sistema (que viven en otras "bandas" de Windows).
+        /// </summary>
+        IntPtr CoveringWindow(IntPtr hwnd, Rectangle buttonBounds)
+        {
+            IntPtr prev = Native.GetWindow(hwnd, Native.GW_HWNDPREV);
+            while (prev != IntPtr.Zero && !CoversButton(prev, buttonBounds))
+                prev = Native.GetWindow(prev, Native.GW_HWNDPREV);
+            return prev;
+        }
+
+        bool CoversButton(IntPtr window, Rectangle buttonBounds)
+        {
+            if (buttonHandles.Contains(window) || !Native.IsWindowVisible(window) || WindowManager.IsOwnWindow(window))
+                return false;
+            if ((Native.GetWindowLong(window, Native.GWL_EXSTYLE) & Native.WS_EX_TRANSPARENT) != 0) return false;
+            if (WindowManager.IsCloaked(window)) return false;
+            Native.RECT r;
+            if (!Native.GetWindowRect(window, out r) || r.Width <= 1 || r.Height <= 1) return false;
+            return Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom).IntersectsWith(buttonBounds);
+        }
+
+        void ShowButtonFor(IntPtr hwnd, Rectangle frame, Placement p)
+        {
+            PinButton b = ButtonFor(hwnd);
+            b.SetBaseColor(p.Background);
+            b.DragMin = frame.Left;
+            b.DragMax = frame.Right - p.Size;
+            bool pinned = WindowManager.IsPinned(hwnd);
+            var bounds = new Rectangle(frame.Right - p.FromRight, frame.Top + p.FromTop, p.Size, p.Size);
+
+            // Los botones viven siempre en la capa "siempre visible" (Windows no deja a una app en
+            // segundo plano subir ventanas por encima de la activa en la capa normal).
+            IntPtr cover = CoveringWindow(hwnd, bounds);
+            IntPtr insertAfter;
+            if (cover == IntPtr.Zero)
+            {
+                insertAfter = Native.HWND_TOPMOST;
+            }
+            else if (pinned && (Native.GetWindowLong(cover, Native.GWL_EXSTYLE) & Native.WS_EX_TOPMOST) != 0)
+            {
+                insertAfter = cover;   // justo debajo de la ventana fijada que la tapa
+            }
+            else
+            {
+                b.HideButton();        // la tapa otra ventana fijada: el botón no debe verse
+                return;
+            }
+            b.ShowAt(bounds, pinned, insertAfter);
         }
 
         // ───────────────────────── Seguimiento de ventanas ─────────────────────────
@@ -186,76 +291,83 @@ namespace PinTop
         void OnWinEvent(IntPtr hook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint thread, uint time)
         {
             if (idObject != Native.OBJID_WINDOW || idChild != 0) return;
-            if (eventType == Native.EVENT_OBJECT_DESTROY) placements.Remove(hwnd);
-            if (eventType == Native.EVENT_SYSTEM_FOREGROUND || hwnd == target) Sync();
+            if (eventType == Native.EVENT_OBJECT_DESTROY)
+            {
+                placements.Remove(hwnd);
+                ReleaseButton(hwnd);
+            }
+            if (eventType == Native.EVENT_SYSTEM_FOREGROUND || buttons.ContainsKey(hwnd) || hwnd == pendingHwnd) Sync();
         }
 
-        /// <summary>Coloca, esconde o recalcula el botón según la ventana activa.</summary>
+        /// <summary>Muestra un botón en la ventana activa y en cada ventana fijada; quita los demás.</summary>
         void Sync()
         {
             if (!settings.ShowButton || settingsForm != null)
             {
-                Reset();
+                CancelPending();
+                ReleaseAllButtons();
                 return;
             }
+            if (buttonMenu.Visible) return;   // no mover nada mientras el menú del botón está abierto
 
             IntPtr fg = Native.GetForegroundWindow();
-            if (fg != IntPtr.Zero && WindowManager.IsOwnWindow(fg))
-            {
-                if (buttonMenu.Visible) return;   // nuestro menú contextual está abierto
-                Reset();
-                return;
-            }
-            if (!WindowManager.IsEligible(fg))
-            {
-                Reset();
-                return;
-            }
+            var wanted = new List<IntPtr>();
+            if (WindowManager.IsEligible(fg)) wanted.Add(fg);
+            foreach (IntPtr hwnd in WindowManager.PinnedWindows())
+                if (hwnd != fg && WindowManager.IsEligible(hwnd)) wanted.Add(hwnd);
 
-            Rectangle frame = WindowManager.GetFrameRect(fg);
-            Placement known;
-            if (placements.TryGetValue(fg, out known) && known.FrameSize == frame.Size)
+            IntPtr needs = IntPtr.Zero;
+            Size needsSize = Size.Empty;
+            var shown = new HashSet<IntPtr>();
+            foreach (IntPtr hwnd in wanted)
             {
-                target = fg;
-                current = known;
-                pendingHwnd = IntPtr.Zero;
-                ShowButton(frame);
+                Rectangle frame = WindowManager.GetFrameRect(hwnd);
+                Placement p;
+                if (placements.TryGetValue(hwnd, out p) && p.FrameSize == frame.Size)
+                {
+                    ShowButtonFor(hwnd, frame, p);
+                    shown.Add(hwnd);
+                }
+                else if (needs == IntPtr.Zero)
+                {
+                    needs = hwnd;   // la activa tiene prioridad (va primera en la lista)
+                    needsSize = frame.Size;
+                }
+            }
+            foreach (IntPtr hwnd in new List<IntPtr>(buttons.Keys))
+                if (!shown.Contains(hwnd)) ReleaseButton(hwnd);
+
+            if (needs == IntPtr.Zero)
+            {
+                CancelPending();
                 return;
             }
-
             // Ya se está calculando para esta ventana con este tamaño: esperar.
-            if (pendingHwnd == fg && pendingSize == frame.Size
+            if (pendingHwnd == needs && pendingSize == needsSize
                 && (settleTimer.Enabled || probeTimeout.Enabled || captureTimer.Enabled))
                 return;
 
-            // Ventana nueva o que ha cambiado de tamaño: esconder y recalcular cuando se quede quieta.
-            target = fg;
-            current = null;
-            pendingHwnd = fg;
-            pendingSize = frame.Size;
-            button.HideButton();
+            // Ventana nueva o que ha cambiado de tamaño: recalcular cuando se quede quieta.
+            pendingHwnd = needs;
+            pendingSize = needsSize;
             probeTimeout.Stop();
             captureTimer.Stop();
             settleTimer.Stop();
             settleTimer.Start();
         }
 
-        void Reset()
+        void CancelPending()
         {
-            target = IntPtr.Zero;
-            current = null;
             pendingHwnd = IntPtr.Zero;
             settleTimer.Stop();
             probeTimeout.Stop();
             captureTimer.Stop();
-            button.HideButton();
         }
 
         bool StillPending()
         {
-            if (pendingHwnd == IntPtr.Zero || pendingHwnd != target) return false;
-            if (Native.GetForegroundWindow() != pendingHwnd || !WindowManager.IsEligible(pendingHwnd)) return false;
-            return WindowManager.GetFrameRect(pendingHwnd).Size == pendingSize;
+            return pendingHwnd != IntPtr.Zero && WindowManager.IsEligible(pendingHwnd)
+                && WindowManager.GetFrameRect(pendingHwnd).Size == pendingSize;
         }
 
         void StartProbe()
@@ -267,10 +379,10 @@ namespace PinTop
             probeTimeout.Start();
         }
 
-        void OnProbeResult(int t, Rectangle? result)
+        void OnProbeResult(int t, IntPtr hwnd, Rectangle? result)
         {
             if (t != ticket) return;   // respuesta de una petición antigua
-            if (probeTimeout.Enabled)
+            if (probeTimeout.Enabled && hwnd == pendingHwnd)
             {
                 probeTimeout.Stop();
                 probeResult = result;
@@ -279,14 +391,14 @@ namespace PinTop
             }
             // Llegó tarde: ya se colocó con la estimación. Si UIA sabe más, recolocar.
             Placement known;
-            if (result.HasValue && target != IntPtr.Zero && placements.TryGetValue(target, out known) && !known.FromUia)
+            if (result.HasValue && placements.TryGetValue(hwnd, out known) && !known.FromUia && WindowManager.IsEligible(hwnd))
             {
-                placements.Remove(target);
+                placements.Remove(hwnd);
+                ReleaseButton(hwnd);
                 probeResult = result;
-                pendingHwnd = target;
-                pendingSize = WindowManager.GetFrameRect(target).Size;
-                current = null;
-                button.HideButton();
+                pendingHwnd = hwnd;
+                pendingSize = WindowManager.GetFrameRect(hwnd).Size;
+                settleTimer.Stop();
                 captureTimer.Start();
             }
         }
@@ -332,22 +444,12 @@ namespace PinTop
             placement.Size = size;
             placement.FromUia = fromUia;
             placement.App = app;
+            placement.Background = background;
 
             if (placements.Count > 200) PrunePlacements();
             placements[hwnd] = placement;
-            current = placement;
             pendingHwnd = IntPtr.Zero;
-            button.SetBaseColor(background);
-            ShowButton(frame);
-        }
-
-        void ShowButton(Rectangle frame)
-        {
-            if (current == null) return;
-            button.DragMin = frame.Left;
-            button.DragMax = frame.Right - current.Size;
-            button.ShowAt(new Rectangle(frame.Right - current.FromRight, frame.Top + current.FromTop, current.Size, current.Size),
-                WindowManager.IsPinned(target));
+            Sync();   // muestra este botón y, si hace falta, calcula el de la siguiente ventana fijada
         }
 
         void PrunePlacements()
@@ -360,24 +462,27 @@ namespace PinTop
         void InvalidatePlacements()
         {
             placements.Clear();
-            Reset();
+            CancelPending();
+            ReleaseAllButtons();
             Sync();
         }
 
-        void OnDragEnded(int left)
+        void OnDragEnded(PinButton b, int left)
         {
-            if (target == IntPtr.Zero || current == null || current.App == null) return;
-            Rectangle frame = WindowManager.GetFrameRect(target);
-            float scale = WindowManager.GetScale(target);
-            settings.Offsets[current.App] = (int)Math.Round((frame.Right - left) / scale);
+            Placement p;
+            if (!placements.TryGetValue(b.Target, out p) || p.App == null) return;
+            Rectangle frame = WindowManager.GetFrameRect(b.Target);
+            float scale = WindowManager.GetScale(b.Target);
+            settings.Offsets[p.App] = (int)Math.Round((frame.Right - left) / scale);
             settings.Save();
             InvalidatePlacements();   // aplica la nueva posición a todas las ventanas de esa app
         }
 
         void ResetPosition(IntPtr hwnd)
         {
-            if (current == null || current.App == null) return;
-            settings.Offsets.Remove(current.App);
+            Placement p;
+            if (!placements.TryGetValue(hwnd, out p) || p.App == null) return;
+            settings.Offsets.Remove(p.App);
             settings.Save();
             InvalidatePlacements();
         }
@@ -436,7 +541,9 @@ namespace PinTop
 
             Hotkey pin;
             settings.Hotkeys.TryGetValue(HotkeyAction.TogglePin, out pin);
-            button.SetHotkeyText(pin.IsEmpty ? "" : pin.ToString());
+            hotkeyText = pin.IsEmpty ? "" : pin.ToString();
+            foreach (PinButton b in buttons.Values) b.SetHotkeyText(hotkeyText);
+            foreach (PinButton b in spareButtons) b.SetHotkeyText(hotkeyText);
             return failed;
         }
 
@@ -487,14 +594,7 @@ namespace PinTop
             {
                 var signal = new EventWaitHandle(false, EventResetMode.AutoReset, name);
                 signals.Add(signal);
-                waits.Add(ThreadPool.RegisterWaitForSingleObject(signal, delegate
-                {
-                    try
-                    {
-                        if (!button.IsDisposed) button.BeginInvoke(action);
-                    }
-                    catch (InvalidOperationException) { }
-                }, null, -1, false));
+                waits.Add(ThreadPool.RegisterWaitForSingleObject(signal, delegate { Post(action); }, null, -1, false));
             }
             catch (Exception) { }
         }
@@ -507,9 +607,7 @@ namespace PinTop
         protected override void ExitThreadCore()
         {
             syncTimer.Stop();
-            settleTimer.Stop();
-            probeTimeout.Stop();
-            captureTimer.Stop();
+            CancelPending();
             foreach (RegisteredWaitHandle w in waits) w.Unregister(null);
             foreach (WaitHandle s in signals) s.Close();
             foreach (IntPtr hook in hooks) Native.UnhookWinEvent(hook);
@@ -520,7 +618,9 @@ namespace PinTop
             if (settingsForm != null) settingsForm.Close();
             tray.Visible = false;
             tray.Dispose();
-            button.Close();
+            ReleaseAllButtons();
+            foreach (PinButton b in spareButtons) b.Close();
+            invoker.Dispose();
             base.ExitThreadCore();
         }
     }
