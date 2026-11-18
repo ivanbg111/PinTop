@@ -158,7 +158,8 @@ namespace PinTop
             }
 
             menu.Items.Add(new ToolStripSeparator());
-            var resetItem = new ToolStripMenuItem("Volver a la posición automática", null, delegate { ResetPosition(menuTarget); });
+            // Solo aparece si arrastraste el botón a mano en esta app.
+            var resetItem = new ToolStripMenuItem("Devolver el botón a su sitio (deshacer arrastre)", null, delegate { ResetPosition(menuTarget); });
             menu.Items.Add(resetItem);
             menu.Items.Add(new ToolStripMenuItem("Ajustes de PinTop…", null, delegate { ShowSettings(); }));
 
@@ -173,9 +174,66 @@ namespace PinTop
                     item.Checked = Math.Abs((int)item.Tag - currentPercent) < 5;
                 Placement placement;
                 placements.TryGetValue(menuTarget, out placement);
-                resetItem.Enabled = placement != null && placement.App != null && settings.Offsets.ContainsKey(placement.App);
+                resetItem.Visible = placement != null && placement.App != null && settings.Offsets.ContainsKey(placement.App);
+            };
+            // PinTop nunca es la app activa (para no robar el foco), así que Windows no cierra
+            // solo este menú al hacer clic fuera. Mientras está abierto, un gancho de ratón
+            // detecta clics fuera, y un temporizador vigila Esc y cambios de ventana activa.
+            menuMouseProc = OnMenuMouse;
+            menuKeyProc = OnMenuKey;
+            menu.Opened += delegate
+            {
+                menuForeground = Native.GetForegroundWindow();
+                IntPtr module = Native.GetModuleHandle(null);
+                menuHook = Native.SetWindowsHookEx(Native.WH_MOUSE_LL, menuMouseProc, module, 0);
+                menuKeyHook = Native.SetWindowsHookEx(Native.WH_KEYBOARD_LL, menuKeyProc, module, 0);
+                menuWatch.Start();
+            };
+            menu.Closed += delegate
+            {
+                menuWatch.Stop();
+                if (menuHook != IntPtr.Zero) Native.UnhookWindowsHookEx(menuHook);
+                if (menuKeyHook != IntPtr.Zero) Native.UnhookWindowsHookEx(menuKeyHook);
+                menuHook = menuKeyHook = IntPtr.Zero;
+            };
+            menuWatch.Interval = 100;
+            menuWatch.Tick += delegate
+            {
+                if (!menu.Visible) { menuWatch.Stop(); return; }
+                if (Native.GetForegroundWindow() != menuForeground) menu.Close(ToolStripDropDownCloseReason.AppClicked);
             };
             return menu;
+        }
+
+        readonly Timer menuWatch = new Timer();
+        Native.LowLevelMouseProc menuMouseProc, menuKeyProc;   // referencias vivas para el GC
+        IntPtr menuHook = IntPtr.Zero, menuKeyHook = IntPtr.Zero;
+        IntPtr menuForeground;
+
+        IntPtr OnMenuKey(int nCode, IntPtr wParam, IntPtr lParam)
+        {
+            // El primer campo de KBDLLHOOKSTRUCT es la tecla virtual.
+            if (nCode >= 0 && wParam.ToInt32() == Native.WM_KEYDOWN
+                && System.Runtime.InteropServices.Marshal.ReadInt32(lParam) == Native.VK_ESCAPE)
+                Post(() => buttonMenu.Close(ToolStripDropDownCloseReason.Keyboard));
+            return Native.CallNextHookEx(menuKeyHook, nCode, wParam, lParam);
+        }
+
+        IntPtr OnMenuMouse(int nCode, IntPtr wParam, IntPtr lParam)
+        {
+            if (nCode >= 0)
+            {
+                int msg = wParam.ToInt32();
+                if (msg == Native.WM_LBUTTONDOWN || msg == Native.WM_RBUTTONDOWN || msg == Native.WM_MBUTTONDOWN)
+                {
+                    var info = (Native.MSLLHOOKSTRUCT)System.Runtime.InteropServices.Marshal.PtrToStructure(
+                        lParam, typeof(Native.MSLLHOOKSTRUCT));
+                    var point = new Point(info.X, info.Y);
+                    if (buttonMenu.Visible && !buttonMenu.Bounds.Contains(point))
+                        Post(() => buttonMenu.Close(ToolStripDropDownCloseReason.AppClicked));
+                }
+            }
+            return Native.CallNextHookEx(menuHook, nCode, wParam, lParam);
         }
 
         // ───────────────────────────── Botones ─────────────────────────────

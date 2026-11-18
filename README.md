@@ -19,7 +19,9 @@ flotando mientras rellenas datos en otra a pantalla completa, sin pantalla divid
   - Al fijar la ventana se pinta con el **color de acento de Windows**.
   - Busca un hueco libre: no tapa los iconos propios de apps como Claude, Chrome o Bambu Studio.
   - **Arrástralo** para moverlo; la posición se recuerda para cada app.
-- **Clic derecho en el botón**: opacidad (100 % … 30 %), volver a la posición automática y ajustes.
+- **Clic derecho en el botón**: fijar/soltar, opacidad (100 % … 30 %) y ajustes. Si arrastraste
+  el botón, aparece también "Devolver el botón a su sitio" para deshacerlo. El menú se cierra al
+  hacer clic fuera o pulsar Esc.
 - **Atajos de teclado configurables** (valores por defecto):
   | Acción | Atajo |
   | --- | --- |
@@ -93,7 +95,7 @@ La posición del botón se decide así:
 - Las ventanas de programas ejecutados **como administrador** solo se pueden fijar si PinTop
   también se ejecuta como administrador (restricción de seguridad de Windows).
 - Si al calcular la posición otra ventana "siempre visible" tapa la barra de título, el botón se
-  coloca a su izquierda (puedes arrastrarlo o usar "Volver a la posición automática").
+  coloca a su izquierda (puedes arrastrarlo a donde prefieras).
 - Algunas ventanas que ya usan transparencia propia no admiten el cambio de opacidad.
 - No se muestra en juegos o vídeos a pantalla completa.
 
