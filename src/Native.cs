@@ -138,6 +138,24 @@ namespace PinTop
         [DllImport("user32.dll")]
         public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
+        public delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags);
+        public const uint GA_ROOT = 2;
+
+        [DllImport("user32.dll")]
+        public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
+        public const uint PW_RENDERFULLCONTENT = 2;
+
+        [DllImport("user32.dll")]
+        public static extern bool IsHungAppWindow(IntPtr hwnd);
+
+        public const uint EVENT_OBJECT_SHOW = 0x8002;
+
         public const uint GW_HWNDPREV = 3;
         public static readonly IntPtr HWND_TOP = IntPtr.Zero;
 

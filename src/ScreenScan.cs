@@ -22,8 +22,28 @@ namespace PinTop
             public Color Background;
         }
 
+        /// <summary>Obtiene la imagen de una zona de la pantalla (coordenadas de pantalla). Devuelve null si falla.</summary>
+        public delegate Bitmap Grab(Rectangle screenArea);
+
+        /// <summary>Captura lo que se ve en pantalla (la ventana debe estar destapada).</summary>
+        public static Bitmap FromScreen(Rectangle area)
+        {
+            var bmp = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb);
+            try
+            {
+                using (Graphics g = Graphics.FromImage(bmp))
+                    g.CopyFromScreen(area.Left, area.Top, 0, 0, bmp.Size);
+                return bmp;
+            }
+            catch (Exception)
+            {
+                bmp.Dispose();   // p. ej. escritorio seguro / pantalla bloqueada
+                return null;
+            }
+        }
+
         /// <summary>Devuelve la X (izquierda) del botón: el hueco libre más cercano a la izquierda de <paramref name="anchorLeft"/>.</summary>
-        public static int FindFreeSlot(int anchorLeft, int y, int size, int gap, int minLeft, float scale, out Color background)
+        public static int FindFreeSlot(int anchorLeft, int y, int size, int gap, int minLeft, float scale, Grab grab, out Color background)
         {
             int defaultX = anchorLeft - gap - size;
             int need = size + gap * 2;
@@ -31,7 +51,7 @@ namespace PinTop
             background = Color.FromArgb(32, 32, 32);
             if (width < need || size <= 0) return defaultX;
 
-            Strip strip = Capture(new Rectangle(anchorLeft - width, y, width, size), "strip.png");
+            Strip strip = Capture(new Rectangle(anchorLeft - width, y, width, size), grab, "strip.png");
             if (strip == null) return defaultX;
             background = strip.Background;
 
@@ -49,7 +69,7 @@ namespace PinTop
         /// Cuando no sabemos dónde están los botones (barra personalizada sin accesibilidad),
         /// busca el icono de minimizar en la esquina derecha y devuelve dónde empieza su zona.
         /// </summary>
-        public static int RefineEstimatedAnchor(Rectangle caption, int frameRight, float scale)
+        public static int RefineEstimatedAnchor(Rectangle caption, int frameRight, float scale, Grab grab)
         {
             int left = caption.Left - (int)Math.Round(40 * scale);
             int top = caption.Top + caption.Height / 4;
@@ -57,7 +77,7 @@ namespace PinTop
             int width = frameRight - 2 - left;
             if (width <= 0) return caption.Left;
 
-            Strip strip = Capture(new Rectangle(left, top, width, height), "corner.png");
+            Strip strip = Capture(new Rectangle(left, top, width, height), grab, "corner.png");
             if (strip == null) return caption.Left;
 
             for (int col = 0; col < width; col++)
@@ -70,20 +90,13 @@ namespace PinTop
             return caption.Left;
         }
 
-        static Strip Capture(Rectangle area, string debugName)
+        static Strip Capture(Rectangle area, Grab grab, string debugName)
         {
             if (area.Width <= 0 || area.Height <= 0) return null;
-            using (var bmp = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb))
+            Bitmap grabbed = grab(area);
+            if (grabbed == null) return null;
+            using (Bitmap bmp = grabbed)
             {
-                try
-                {
-                    using (Graphics g = Graphics.FromImage(bmp))
-                        g.CopyFromScreen(area.Left, area.Top, 0, 0, bmp.Size);
-                }
-                catch (Exception)
-                {
-                    return null;   // p. ej. escritorio seguro / pantalla bloqueada
-                }
                 if (Debug.Enabled) bmp.Save(Debug.PathFor(debugName));
 
                 int width = area.Width, height = area.Height;
@@ -139,6 +152,61 @@ namespace PinTop
         static int Bin(byte[] px, int i)
         {
             return ((px[i + 2] >> 4) << 8) | ((px[i + 1] >> 4) << 4) | (px[i] >> 4);
+        }
+    }
+
+    /// <summary>
+    /// Imagen de una ventana pedida a Windows (PrintWindow): sirve aunque la ventana esté
+    /// tapada por otras o por nuestros botones. Si la app no sabe pintarse así, usa la pantalla.
+    /// </summary>
+    internal sealed class WindowGrab : IDisposable
+    {
+        readonly Bitmap image;
+        readonly Point origin;
+
+        public WindowGrab(IntPtr hwnd)
+        {
+            Native.RECT r;
+            if (Native.IsHungAppWindow(hwnd) || !Native.GetWindowRect(hwnd, out r) || r.Width <= 0 || r.Height <= 0) return;
+            origin = new Point(r.Left, r.Top);
+            var bmp = new Bitmap(r.Width, r.Height, PixelFormat.Format32bppArgb);
+            bool ok;
+            using (Graphics g = Graphics.FromImage(bmp))
+            {
+                IntPtr hdc = g.GetHdc();
+                ok = Native.PrintWindow(hwnd, hdc, Native.PW_RENDERFULLCONTENT);
+                g.ReleaseHdc(hdc);
+            }
+            if (ok) image = bmp;
+            else bmp.Dispose();
+        }
+
+        public Bitmap Grab(Rectangle screenArea)
+        {
+            if (image != null)
+            {
+                var local = new Rectangle(screenArea.X - origin.X, screenArea.Y - origin.Y, screenArea.Width, screenArea.Height);
+                if (new Rectangle(Point.Empty, image.Size).Contains(local))
+                {
+                    Bitmap crop = image.Clone(local, PixelFormat.Format32bppArgb);
+                    if (!IsBlank(crop)) return crop;
+                    crop.Dispose();   // la app no se dejó pintar: imagen negra
+                }
+            }
+            return ScreenScan.FromScreen(screenArea);
+        }
+
+        static bool IsBlank(Bitmap bmp)
+        {
+            for (int y = 0; y < bmp.Height; y += 2)
+                for (int x = 0; x < bmp.Width; x += 2)
+                    if ((bmp.GetPixel(x, y).ToArgb() & 0xFFFFFF) != 0) return false;
+            return true;
+        }
+
+        public void Dispose()
+        {
+            if (image != null) image.Dispose();
         }
     }
 }

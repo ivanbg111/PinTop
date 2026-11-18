@@ -101,6 +101,8 @@ namespace PinTop
     internal sealed class Settings
     {
         public bool ShowButton = true;
+        /// <summary>true: botón en todas las ventanas visibles; false: solo en la activa y las fijadas.</summary>
+        public bool AllWindows = true;
         public int ButtonSize = 24;   // px lógicos: 20, 24 o 28
         public readonly Dictionary<HotkeyAction, Hotkey> Hotkeys = new Dictionary<HotkeyAction, Hotkey>();
         /// <summary>Posición elegida a mano por app: distancia (px lógicos) del borde derecho de la ventana.</summary>
@@ -146,6 +148,7 @@ namespace PinTop
                     int number;
 
                     if (key == "ShowButton") s.ShowButton = value != "0";
+                    else if (key == "AllWindows") s.AllWindows = value != "0";
                     else if (key == "ButtonSize" && int.TryParse(value, out number)) s.ButtonSize = Math.Max(16, Math.Min(32, number));
                     else if (key.StartsWith("Hotkey."))
                     {
@@ -164,6 +167,7 @@ namespace PinTop
         {
             var lines = new List<string>();
             lines.Add("ShowButton=" + (ShowButton ? "1" : "0"));
+            lines.Add("AllWindows=" + (AllWindows ? "1" : "0"));
             lines.Add("ButtonSize=" + ButtonSize);
             foreach (KeyValuePair<HotkeyAction, Hotkey> pair in Hotkeys)
                 lines.Add("Hotkey." + pair.Key + "=" + pair.Value.Serialize());
@@ -183,6 +187,7 @@ namespace PinTop
         {
             var c = new Settings();
             c.ShowButton = ShowButton;
+            c.AllWindows = AllWindows;
             c.ButtonSize = ButtonSize;
             foreach (KeyValuePair<HotkeyAction, Hotkey> pair in Hotkeys) c.Hotkeys[pair.Key] = pair.Value;
             foreach (KeyValuePair<string, int> pair in Offsets) c.Offsets[pair.Key] = pair.Value;

@@ -10,9 +10,9 @@ flotando mientras rellenas datos en otra a pantalla completa, sin pantalla divid
 
 ## Funciones
 
-- **Botón de chincheta** junto a minimizar / maximizar / cerrar de la ventana activa.
-  - **Cada ventana fijada mantiene su botón siempre visible** (aunque no sea la activa), así
-    puedes tener 2 o 20 ventanas encima y soltar cualquiera sin tener que activarla antes.
+- **Botón de chincheta** junto a minimizar / maximizar / cerrar de **todas las ventanas visibles**,
+  sin tener que hacer clic en ellas antes (en Ajustes se puede limitar a la activa y las fijadas).
+  - Puedes tener 2 o 20 ventanas encima y fijar o soltar cualquiera sin activarla antes.
   - Si otra ventana tapa la barra de título, el botón queda tapado también (no flota por encima).
   - Usa la misma fuente de iconos que los botones de Windows 11, así que se ve nítido.
   - Toma el color de la barra de título de cada app para integrarse.
@@ -81,6 +81,8 @@ un registro de cómo ha colocado el botón en cada ventana y la franja de barra 
 | `src/Support.cs` | Atajos globales, inicio con Windows, colores y dibujo vectorial de la chincheta. |
 
 La posición del botón se decide así:
+0. La imagen de la barra se toma de la pantalla si se ve entera, o se le pide a la propia ventana
+   (`PrintWindow`) si otra ventana la tapa en parte.
 1. Botones reales de la ventana según UI Automation (funciona en Chrome, Electron, apps de Windows 11…).
 2. Si no, la zona que informa Windows (DWM) o, en barras personalizadas, se busca el icono de minimizar en los píxeles.
 3. A la izquierda de esos botones se busca el primer hueco libre para no tapar nada.

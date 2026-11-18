@@ -239,6 +239,13 @@ namespace PinTop
             return prev;
         }
 
+        bool AnyButtonIntersects(Rectangle area)
+        {
+            foreach (PinButton b in buttons.Values)
+                if (b.IsShown && b.Bounds.IntersectsWith(area)) return true;
+            return false;
+        }
+
         bool CoversButton(IntPtr window, Rectangle buttonBounds)
         {
             if (buttonHandles.Contains(window) || !Native.IsWindowVisible(window) || WindowManager.IsOwnWindow(window))
@@ -296,10 +303,31 @@ namespace PinTop
                 placements.Remove(hwnd);
                 ReleaseButton(hwnd);
             }
-            if (eventType == Native.EVENT_SYSTEM_FOREGROUND || buttons.ContainsKey(hwnd) || hwnd == pendingHwnd) Sync();
+            if (eventType == Native.EVENT_SYSTEM_FOREGROUND || buttons.ContainsKey(hwnd) || hwnd == pendingHwnd)
+            {
+                Sync();
+            }
+            else if (settings.AllWindows && Native.GetAncestor(hwnd, Native.GA_ROOT) == hwnd)
+            {
+                // Otra ventana se movió, apareció o desapareció: puede tapar o destapar botones.
+                RequestSync();
+            }
         }
 
-        /// <summary>Muestra un botón en la ventana activa y en cada ventana fijada; quita los demás.</summary>
+        bool syncQueued;
+
+        /// <summary>Agrupa muchos eventos seguidos en una sola sincronización.</summary>
+        void RequestSync()
+        {
+            if (syncQueued) return;
+            syncQueued = true;
+            Post(() => { syncQueued = false; Sync(); });
+        }
+
+        /// <summary>
+        /// Muestra un botón en cada ventana que lo necesita (todas las visibles, o solo la activa y
+        /// las fijadas, según ajustes) y quita los demás.
+        /// </summary>
         void Sync()
         {
             if (!settings.ShowButton || settingsForm != null)
@@ -315,6 +343,9 @@ namespace PinTop
             if (WindowManager.IsEligible(fg)) wanted.Add(fg);
             foreach (IntPtr hwnd in WindowManager.PinnedWindows())
                 if (hwnd != fg && WindowManager.IsEligible(hwnd)) wanted.Add(hwnd);
+            if (settings.AllWindows)
+                foreach (IntPtr hwnd in WindowManager.AppWindows())
+                    if (!wanted.Contains(hwnd)) wanted.Add(hwnd);
 
             IntPtr needs = IntPtr.Zero;
             Size needsSize = Size.Empty;
@@ -330,6 +361,12 @@ namespace PinTop
                 }
                 else if (needs == IntPtr.Zero)
                 {
+                    // Las ventanas de fondo con la esquina tapada aún no necesitan botón:
+                    // se calculará cuando se destapen. La activa y las fijadas, siempre.
+                    bool important = hwnd == fg || WindowManager.IsPinned(hwnd);
+                    Rectangle corner = WindowManager.EstimateCaption(frame, WindowManager.GetScale(hwnd));
+                    corner = Rectangle.FromLTRB(corner.Left - corner.Width, corner.Top, corner.Right, corner.Bottom);
+                    if (!important && CoveringWindow(hwnd, corner) != IntPtr.Zero) continue;
                     needs = hwnd;   // la activa tiene prioridad (va primera en la lista)
                     needsSize = frame.Size;
                 }
@@ -413,21 +450,41 @@ namespace PinTop
 
             Rectangle caption;
             bool fromUia = probeResult.HasValue;
+            bool estimated = false;
             if (fromUia) caption = probeResult.Value;
             else if (!WindowManager.TryGetDwmCaption(hwnd, out caption))
             {
                 caption = WindowManager.EstimateCaption(frame, scale);
-                int anchor = ScreenScan.RefineEstimatedAnchor(caption, frame.Right, scale);
-                caption = Rectangle.FromLTRB(anchor, caption.Top, caption.Right, caption.Bottom);
+                estimated = true;
             }
 
-            int size = (int)Math.Round(settings.ButtonSize * scale);
-            size = Math.Max((int)Math.Round(16 * scale), Math.Min(size, caption.Height - (int)Math.Round(4 * scale)));
-            int gap = (int)Math.Round(4 * scale);
-            int y = Math.Max(frame.Top, caption.Top + (caption.Height - size) / 2);
+            // ¿De dónde sacamos la imagen de la barra de título? De la pantalla si se ve entera
+            // (es lo más fiel); si otra ventana o un botón nuestro la tapa, se la pedimos a la ventana.
+            Rectangle titleRow = Rectangle.FromLTRB(frame.Left, caption.Top, frame.Right, caption.Bottom);
+            bool fromScreen = CoveringWindow(hwnd, titleRow) == IntPtr.Zero && !AnyButtonIntersects(titleRow);
+            WindowGrab windowGrab = fromScreen ? null : new WindowGrab(hwnd);
+            ScreenScan.Grab grab = fromScreen ? new ScreenScan.Grab(ScreenScan.FromScreen) : windowGrab.Grab;
 
+            int size, y, x;
             Color background;
-            int x = ScreenScan.FindFreeSlot(caption.Left, y, size, gap, frame.Left, scale, out background);
+            try
+            {
+                if (estimated)
+                {
+                    int anchor = ScreenScan.RefineEstimatedAnchor(caption, frame.Right, scale, grab);
+                    caption = Rectangle.FromLTRB(anchor, caption.Top, caption.Right, caption.Bottom);
+                }
+
+                size = (int)Math.Round(settings.ButtonSize * scale);
+                size = Math.Max((int)Math.Round(16 * scale), Math.Min(size, caption.Height - (int)Math.Round(4 * scale)));
+                int gap = (int)Math.Round(4 * scale);
+                y = Math.Max(frame.Top, caption.Top + (caption.Height - size) / 2);
+                x = ScreenScan.FindFreeSlot(caption.Left, y, size, gap, frame.Left, scale, grab, out background);
+            }
+            finally
+            {
+                if (windowGrab != null) windowGrab.Dispose();
+            }
 
             string app = WindowManager.GetAppName(hwnd);
             int offset;
@@ -435,7 +492,8 @@ namespace PinTop
                 x = frame.Right - (int)Math.Round(offset * scale);
             x = Math.Max(frame.Left, Math.Min(frame.Right - size, x));
             Debug.Log("place app=" + app + " class=" + WindowManager.GetClassName(hwnd) + " frame=" + frame
-                + " caption=" + caption + (fromUia ? " (UIA)" : " (DWM/estimada)") + " x=" + x + " y=" + y + " size=" + size);
+                + " caption=" + caption + (fromUia ? " (UIA)" : " (DWM/estimada)") + (fromScreen ? " [pantalla]" : " [PrintWindow]")
+                + " x=" + x + " y=" + y + " size=" + size);
 
             var placement = new Placement();
             placement.FrameSize = frame.Size;
@@ -572,6 +630,7 @@ namespace PinTop
                 if (saved)
                 {
                     settings.ShowButton = result.ShowButton;
+                    settings.AllWindows = result.AllWindows;
                     settings.ButtonSize = result.ButtonSize;
                     settings.Hotkeys.Clear();
                     foreach (KeyValuePair<HotkeyAction, Hotkey> pair in result.Hotkeys) settings.Hotkeys[pair.Key] = pair.Value;

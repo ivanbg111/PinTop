@@ -149,6 +149,17 @@ namespace PinTop
             if (pin) pinnedByUs.Add(hwnd); else pinnedByUs.Remove(hwnd);
         }
 
+        /// <summary>Todas las ventanas de aplicación visibles, de la más alta a la más baja en la pila.</summary>
+        public static List<IntPtr> AppWindows()
+        {
+            var all = new List<IntPtr>();
+            Native.EnumWindows((hwnd, l) => { all.Add(hwnd); return true; }, IntPtr.Zero);
+            var result = new List<IntPtr>();
+            foreach (IntPtr hwnd in all)
+                if (Native.IsWindowVisible(hwnd) && IsEligible(hwnd)) result.Add(hwnd);
+            return result;
+        }
+
         /// <summary>Ventanas que PinTop ha fijado y siguen fijadas (limpia las cerradas o soltadas por la app).</summary>
         public static List<IntPtr> PinnedWindows()
         {

@@ -220,6 +220,17 @@ namespace PinTop
             flow.Controls.Add(showButton);
             flow.SetFlowBreak(showButton, true);
 
+            var allWindows = new CheckBox();
+            allWindows.Text = "En todas las ventanas (si no, solo en la activa y en las fijadas)";
+            allWindows.AutoSize = true;
+            allWindows.Margin = new Padding(20, 0, 3, 3);
+            allWindows.Checked = working.AllWindows;
+            allWindows.Enabled = working.ShowButton;
+            allWindows.CheckedChanged += delegate { working.AllWindows = allWindows.Checked; };
+            showButton.CheckedChanged += delegate { allWindows.Enabled = showButton.Checked; };
+            flow.Controls.Add(allWindows);
+            flow.SetFlowBreak(allWindows, true);
+
             var sizeLabel = new Label();
             sizeLabel.Text = "Tamaño:";
             sizeLabel.AutoSize = true;
