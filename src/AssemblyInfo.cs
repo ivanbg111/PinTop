@@ -4,5 +4,5 @@ using System.Reflection;
 [assembly: AssemblyDescription("Fija cualquier ventana encima de todo con un botón en su barra de título")]
 [assembly: AssemblyProduct("PinTop")]
 [assembly: AssemblyCopyright("Copyright © 2026 ivanbg111 · Licencia MIT")]
-[assembly: AssemblyVersion("1.1.0.0")]
-[assembly: AssemblyFileVersion("1.1.0.0")]
+[assembly: AssemblyVersion("1.2.0.0")]
+[assembly: AssemblyFileVersion("1.2.0.0")]

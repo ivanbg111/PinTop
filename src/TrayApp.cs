@@ -70,6 +70,7 @@ namespace PinTop
         public TrayApp()
         {
             settings = Settings.Load();
+            Theme.Mode = settings.ThemeMode;
             try { Startup.RefreshPath(); } catch (Exception) { }
 
             invoker.CreateControl();
@@ -968,29 +969,32 @@ namespace PinTop
                 return;
             }
             hotkeys.UnregisterAll();   // para poder capturar las combinaciones actuales en la ventana
-            settingsForm = new SettingsForm(settings, RunningApps());
+            settingsForm = new SettingsForm(settings, RunningApps(), ApplySettings);
+            settingsForm.NewVersionFound += OnNewVersion;
             Sync();
             settingsForm.FormClosed += delegate
             {
-                bool saved = settingsForm.DialogResult == DialogResult.OK;
-                Settings result = settingsForm.Result;
                 settingsForm.Dispose();
                 settingsForm = null;
-                if (saved)
-                {
-                    settings.CopyFrom(result);
-                    settings.Save();
-                    autoPinChecked.Clear();   // aplicar "fijar siempre" a lo que ya está abierto
-                    UpdateFadeTimer();
-                    if (settings.CheckUpdates && newVersion == null)
-                        Updater.CheckAsync(v => Post(() => OnNewVersion(v)));
-                }
                 List<string> failed = RegisterHotkeys();
                 if (failed.Count > 0) WarnHotkeys(failed);
                 InvalidatePlacements();
             };
             settingsForm.Show();
             settingsForm.Activate();
+        }
+
+        /// <summary>Los ajustes se guardan y aplican al momento, en cuanto cambias algo en la ventana.</summary>
+        void ApplySettings(Settings changed)
+        {
+            bool updatesWereOff = !settings.CheckUpdates;
+            settings.CopyFrom(changed);
+            settings.Save();
+            Theme.Mode = settings.ThemeMode;
+            autoPinChecked.Clear();   // aplicar "fijar siempre" a lo que ya está abierto
+            UpdateFadeTimer();
+            if (updatesWereOff && settings.CheckUpdates && newVersion == null)
+                Updater.CheckAsync(v => Post(() => OnNewVersion(v)));
         }
 
         /// <summary>Nombres de las apps con ventanas abiertas (para elegirlas en Ajustes).</summary>

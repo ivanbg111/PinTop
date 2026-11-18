@@ -15,8 +15,11 @@ namespace PinTop
         const string Api = "https://api.github.com/repos/ivanbg111/PinTop/releases/latest";
         public const string ReleasesPage = "https://github.com/ivanbg111/PinTop/releases/latest";
 
-        /// <summary>Comprueba en segundo plano; si hay versión nueva llama a <paramref name="onNewer"/> (en otro hilo).</summary>
-        public static void CheckAsync(Action<string> onNewer)
+        /// <summary>
+        /// Comprueba en segundo plano. Llama (en otro hilo) a <paramref name="onNewer"/> si hay versión nueva,
+        /// a <paramref name="onLatest"/> si ya es la última y a <paramref name="onError"/> si no se pudo consultar.
+        /// </summary>
+        public static void CheckAsync(Action<string> onNewer, Action onLatest = null, Action onError = null)
         {
             ThreadPool.QueueUserWorkItem(delegate
             {
@@ -35,13 +38,19 @@ namespace PinTop
                     Match m = Regex.Match(json, "\"tag_name\"\\s*:\\s*\"v?([0-9]+(\\.[0-9]+){0,3})\"");
                     Debug.Log("update check: respuesta " + json.Length + " bytes, tag " + (m.Success ? m.Groups[1].Value : "no encontrado")
                         + ", versión actual " + Program.Version);
-                    if (!m.Success) return;
+                    if (!m.Success)
+                    {
+                        if (onError != null) onError();
+                        return;
+                    }
                     string latest = m.Groups[1].Value;
                     if (Normalize(latest) > Normalize(Program.Version)) onNewer(latest);
+                    else if (onLatest != null) onLatest();
                 }
                 catch (Exception ex)
                 {
-                    Debug.Log("update check: " + ex.Message);   // sin conexión, límite de GitHub...: se ignora
+                    Debug.Log("update check: " + ex.Message);   // sin conexión, límite de GitHub...
+                    if (onError != null) onError();
                 }
             });
         }

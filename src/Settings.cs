@@ -112,6 +112,8 @@ namespace PinTop
         public int FadePercent = 40;
         /// <summary>Consultar en GitHub si hay una versión nueva.</summary>
         public bool CheckUpdates = true;
+        /// <summary>Tema de los ajustes y menús: 0 = como Windows, 1 = claro, 2 = oscuro.</summary>
+        public int ThemeMode = 0;
         /// <summary>Apps que se fijan solas al abrirse.</summary>
         public readonly HashSet<string> AutoPinApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         /// <summary>Apps en las que nunca se muestra el botón.</summary>
@@ -167,6 +169,7 @@ namespace PinTop
                     else if (key == "FadeEnabled") s.FadeEnabled = value != "0";
                     else if (key == "FadePercent" && int.TryParse(value, out number)) s.FadePercent = Math.Max(10, Math.Min(90, number));
                     else if (key == "CheckUpdates") s.CheckUpdates = value != "0";
+                    else if (key == "Theme" && int.TryParse(value, out number)) s.ThemeMode = Math.Max(0, Math.Min(2, number));
                     else if (key == "AutoPinApps") AddApps(s.AutoPinApps, value);
                     else if (key == "ExcludedApps") AddApps(s.ExcludedApps, value);
                     else if (key.StartsWith("Hotkey."))
@@ -192,6 +195,7 @@ namespace PinTop
             lines.Add("FadeEnabled=" + (FadeEnabled ? "1" : "0"));
             lines.Add("FadePercent=" + FadePercent);
             lines.Add("CheckUpdates=" + (CheckUpdates ? "1" : "0"));
+            lines.Add("Theme=" + ThemeMode);
             lines.Add("AutoPinApps=" + string.Join("|", new List<string>(AutoPinApps).ToArray()));
             lines.Add("ExcludedApps=" + string.Join("|", new List<string>(ExcludedApps).ToArray()));
             foreach (KeyValuePair<HotkeyAction, Hotkey> pair in Hotkeys)
@@ -231,6 +235,7 @@ namespace PinTop
             FadeEnabled = other.FadeEnabled;
             FadePercent = other.FadePercent;
             CheckUpdates = other.CheckUpdates;
+            ThemeMode = other.ThemeMode;
             Hotkeys.Clear();
             foreach (KeyValuePair<HotkeyAction, Hotkey> pair in other.Hotkeys) Hotkeys[pair.Key] = pair.Value;
             Offsets.Clear();

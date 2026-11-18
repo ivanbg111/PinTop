@@ -140,13 +140,15 @@ namespace PinTop
             return IsDark(background) ? Color.FromArgb(240, 240, 240) : Color.FromArgb(28, 28, 28);
         }
 
-        // ─── Modo oscuro (sigue el tema de apps de Windows) ───
+        // ─── Tema claro / oscuro ───
 
-        public static readonly Color DarkBack = Color.FromArgb(32, 32, 32);
-        public static readonly Color DarkSurface = Color.FromArgb(45, 45, 45);
-        public static readonly Color DarkBorder = Color.FromArgb(75, 75, 75);
-        public static readonly Color DarkText = Color.FromArgb(235, 235, 235);
-        public static readonly Color DarkMuted = Color.FromArgb(160, 160, 160);
+        /// <summary>0 = como Windows, 1 = claro, 2 = oscuro (lo fija TrayApp desde los ajustes).</summary>
+        public static int Mode;
+
+        public static bool IsDarkMode()
+        {
+            return Mode == 2 || (Mode == 0 && AppsUseDark());
+        }
 
         public static bool AppsUseDark()
         {
@@ -164,49 +166,99 @@ namespace PinTop
             }
         }
 
-        public static void UseDarkTitleBar(IntPtr hwnd, bool dark)
+        /// <summary>Barra de título del color de la ventana (Windows 11) y en modo oscuro si toca.</summary>
+        public static void StyleTitleBar(IntPtr hwnd, Palette p)
         {
-            int value = dark ? 1 : 0;
-            Native.DwmSetWindowAttribute(hwnd, Native.DWMWA_USE_IMMERSIVE_DARK_MODE, ref value, sizeof(int));
+            int dark = p.Dark ? 1 : 0;
+            Native.DwmSetWindowAttribute(hwnd, Native.DWMWA_USE_IMMERSIVE_DARK_MODE, ref dark, sizeof(int));
+            int caption = ColorRef(p.Window);
+            Native.DwmSetWindowAttribute(hwnd, Native.DWMWA_CAPTION_COLOR, ref caption, sizeof(int));
+            int text = ColorRef(p.Text);
+            Native.DwmSetWindowAttribute(hwnd, Native.DWMWA_TEXT_COLOR, ref text, sizeof(int));
         }
 
-        /// <summary>Aplica colores oscuros a un menú si Windows está en modo oscuro.</summary>
+        static int ColorRef(Color c)
+        {
+            return c.R | (c.G << 8) | (c.B << 16);
+        }
+
+        /// <summary>Estilo moderno (claro u oscuro según el tema) para un menú.</summary>
         public static void StyleMenu(ToolStripDropDown menu)
         {
-            if (AppsUseDark())
+            Palette p = Palette.Create(IsDarkMode());
+            menu.Renderer = new ModernMenuRenderer(p);
+            menu.ForeColor = p.Text;
+            menu.BackColor = p.Card;
+            menu.Font = Ui.Body;
+            menu.Padding = new Padding(Ui.S(4), Ui.S(4), Ui.S(4), Ui.S(4));
+            foreach (ToolStripItem item in menu.Items)
             {
-                menu.Renderer = new DarkMenuRenderer();
-                menu.ForeColor = DarkText;
-            }
-            else
-            {
-                menu.RenderMode = ToolStripRenderMode.ManagerRenderMode;
-                menu.ForeColor = SystemColors.MenuText;
+                if (item is ToolStripSeparator) continue;
+                item.Padding = new Padding(Ui.S(4), Ui.S(5), Ui.S(4), Ui.S(5));
+                item.Font = item.Font.Bold ? Ui.BodyStrong : Ui.Body;
             }
         }
     }
 
-    internal sealed class DarkMenuRenderer : ToolStripProfessionalRenderer
+    /// <summary>Menús con aspecto de Windows 11: esquinas redondeadas al pasar, colores del tema.</summary>
+    internal sealed class ModernMenuRenderer : ToolStripProfessionalRenderer
     {
-        public DarkMenuRenderer() : base(new DarkMenuColors()) { }
+        readonly Palette p;
+
+        public ModernMenuRenderer(Palette p) : base(new MenuColors(p))
+        {
+            this.p = p;
+            RoundedEdges = false;
+        }
+
+        protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
+        {
+            e.Graphics.Clear(p.Card);
+        }
+
+        protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e)
+        {
+            using (var pen = new Pen(p.CardBorder))
+                e.Graphics.DrawRectangle(pen, 0, 0, e.ToolStrip.Width - 1, e.ToolStrip.Height - 1);
+        }
+
+        protected override void OnRenderImageMargin(ToolStripRenderEventArgs e) { }
+
+        protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
+        {
+            if (!e.Item.Selected || !e.Item.Enabled) return;
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            var r = new RectangleF(Ui.S(2), 1, e.Item.Width - Ui.S(4), e.Item.Height - 2);
+            using (GraphicsPath path = Ui.Round(r, Ui.S(4)))
+            using (var brush = new SolidBrush(p.Hover))
+                g.FillPath(brush, path);
+        }
+
+        protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e)
+        {
+            int y = e.Item.Height / 2;
+            using (var pen = new Pen(p.Divider))
+                e.Graphics.DrawLine(pen, Ui.S(8), y, e.Item.Width - Ui.S(8), y);
+        }
 
         protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
         {
-            e.TextColor = e.Item.Enabled ? Theme.DarkText : Theme.DarkMuted;
+            e.TextColor = e.Item.Enabled ? p.Text : p.SubText;
             base.OnRenderItemText(e);
         }
 
         protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e)
         {
-            e.ArrowColor = Theme.DarkText;
+            e.ArrowColor = p.SubText;
             base.OnRenderArrow(e);
         }
 
         protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e)
         {
-            // Marca de verificación dibujada a mano (la de serie es negra y no se ve).
+            // Marca de verificación con el color de acento.
             Rectangle r = e.ImageRectangle;
-            using (var pen = new Pen(Theme.DarkText, 1.6f))
+            using (var pen = new Pen(p.Accent, Math.Max(1.6f, Ui.Scale * 1.6f)))
             {
                 e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
                 e.Graphics.DrawLines(pen, new[]
@@ -219,28 +271,32 @@ namespace PinTop
         }
     }
 
-    internal sealed class DarkMenuColors : ProfessionalColorTable
+    internal sealed class MenuColors : ProfessionalColorTable
     {
-        static readonly Color Back = Color.FromArgb(43, 43, 43);
-        static readonly Color Hover = Color.FromArgb(65, 65, 65);
-        static readonly Color Line = Color.FromArgb(70, 70, 70);
+        readonly Palette p;
 
-        public override Color ToolStripDropDownBackground { get { return Back; } }
-        public override Color ImageMarginGradientBegin { get { return Back; } }
-        public override Color ImageMarginGradientMiddle { get { return Back; } }
-        public override Color ImageMarginGradientEnd { get { return Back; } }
-        public override Color MenuBorder { get { return Line; } }
-        public override Color MenuItemBorder { get { return Hover; } }
-        public override Color MenuItemSelected { get { return Hover; } }
-        public override Color MenuItemSelectedGradientBegin { get { return Hover; } }
-        public override Color MenuItemSelectedGradientEnd { get { return Hover; } }
-        public override Color MenuItemPressedGradientBegin { get { return Hover; } }
-        public override Color MenuItemPressedGradientEnd { get { return Hover; } }
-        public override Color SeparatorDark { get { return Line; } }
-        public override Color SeparatorLight { get { return Line; } }
-        public override Color CheckBackground { get { return Back; } }
-        public override Color CheckSelectedBackground { get { return Hover; } }
-        public override Color CheckPressedBackground { get { return Hover; } }
+        public MenuColors(Palette p)
+        {
+            this.p = p;
+            UseSystemColors = false;
+        }
+
+        public override Color ToolStripDropDownBackground { get { return p.Card; } }
+        public override Color ImageMarginGradientBegin { get { return p.Card; } }
+        public override Color ImageMarginGradientMiddle { get { return p.Card; } }
+        public override Color ImageMarginGradientEnd { get { return p.Card; } }
+        public override Color MenuBorder { get { return p.CardBorder; } }
+        public override Color MenuItemBorder { get { return p.Hover; } }
+        public override Color MenuItemSelected { get { return p.Hover; } }
+        public override Color MenuItemSelectedGradientBegin { get { return p.Hover; } }
+        public override Color MenuItemSelectedGradientEnd { get { return p.Hover; } }
+        public override Color MenuItemPressedGradientBegin { get { return p.Hover; } }
+        public override Color MenuItemPressedGradientEnd { get { return p.Hover; } }
+        public override Color SeparatorDark { get { return p.Divider; } }
+        public override Color SeparatorLight { get { return p.Divider; } }
+        public override Color CheckBackground { get { return p.Card; } }
+        public override Color CheckSelectedBackground { get { return p.Hover; } }
+        public override Color CheckPressedBackground { get { return p.Hover; } }
     }
 
     /// <summary>Dibujo de la chincheta.</summary>

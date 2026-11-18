@@ -42,8 +42,10 @@ flotando mientras rellenas datos en otra a pantalla completa, sin pantalla divid
   | Menos transparente | `Ctrl + Alt + RePág` |
   | Modo fantasma (activar en la ventana activa / quitarlo a todas) | `Ctrl + Alt + G` |
   | Mostrar / ocultar el botón | (sin asignar) |
-- **Ventana de ajustes** (doble clic en el icono de la bandeja, o volver a abrir `PinTop.exe`),
-  con **modo oscuro** si Windows lo usa.
+- **Ventana de ajustes** al estilo de Configuración de Windows 11 (doble clic en el icono de la
+  bandeja, o volver a abrir `PinTop.exe`): menú lateral por secciones, tarjetas, interruptores,
+  atajos dibujados como teclas y apps como etiquetas. **Tema claro, oscuro o como Windows**
+  (también en los menús). Los cambios se guardan al momento.
 - **Aviso de actualizaciones**: una vez al día consulta la última Release en GitHub (solo esa
   información pública; no envía datos) y avisa si hay una versión nueva. Se puede desactivar.
 - Al salir, **devuelve todas las ventanas a su estado normal** (sin fijar, opacas, sin modo
@@ -96,7 +98,8 @@ probar el aviso de actualización.
 | `src/ScreenScan.cs` | Analiza los píxeles de la barra de título: hueco libre y color de fondo. |
 | `src/PinButton.cs` | El botón flotante: nunca roba el foco (`WS_EX_NOACTIVATE`) y se puede arrastrar. |
 | `src/WindowManager.cs` | Qué ventanas admiten botón, fijar (`HWND_TOPMOST`) y opacidad (`SetLayeredWindowAttributes`). |
-| `src/SettingsForm.cs` | Ventana de ajustes, captura de atajos y listas de apps. |
+| `src/SettingsForm.cs` | Ventana de ajustes: secciones y lógica de cada opción. |
+| `src/ModernUI.cs` | Controles dibujados a mano (interruptor, selector, teclas, tarjetas, menú lateral, etiquetas) y paletas clara/oscura. |
 | `src/Settings.cs` | Ajustes en `%APPDATA%\PinTop\settings.ini`. |
 | `src/Support.cs` | Atajos globales, inicio con Windows, colores, modo oscuro y dibujo de la chincheta. |
 | `src/Updater.cs` | Comprueba en GitHub si hay una versión nueva. |

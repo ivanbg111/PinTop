@@ -51,6 +51,7 @@ namespace PinTop
 
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
+                Ui.Init();   // escala por DPI y fuentes de la interfaz
                 Application.Run(new TrayApp());
             }
         }

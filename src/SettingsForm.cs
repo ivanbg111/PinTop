@@ -6,608 +6,387 @@ using System.Windows.Forms;
 
 namespace PinTop
 {
-    /// <summary>Casilla que captura una combinación de teclas al pulsarla.</summary>
-    internal sealed class HotkeyBox : TextBox
-    {
-        Hotkey value;
-
-        public event EventHandler ValueChanged;
-
-        public HotkeyBox()
-        {
-            ReadOnly = true;
-            BackColor = SystemColors.Window;
-            ShortcutsEnabled = false;
-            TextAlign = HorizontalAlignment.Center;
-            Cursor = Cursors.Hand;
-        }
-
-        public Hotkey Value
-        {
-            get { return value; }
-            set
-            {
-                this.value = value;
-                Text = value.ToString();
-            }
-        }
-
-        protected override bool IsInputKey(Keys keyData)
-        {
-            // Tab sin modificadores sigue sirviendo para moverse entre casillas.
-            return keyData != Keys.Tab && keyData != (Keys.Tab | Keys.Shift);
-        }
-
-        static bool WinDown()
-        {
-            return Native.GetKeyState(Native.VK_LWIN) < 0 || Native.GetKeyState(Native.VK_RWIN) < 0;
-        }
-
-        protected override void OnKeyDown(KeyEventArgs e)
-        {
-            e.Handled = true;
-            e.SuppressKeyPress = true;
-            Keys key = e.KeyCode;
-            uint mods = 0;
-            if (e.Control) mods |= Native.MOD_CONTROL;
-            if (e.Alt) mods |= Native.MOD_ALT;
-            if (e.Shift) mods |= Native.MOD_SHIFT;
-            if (WinDown()) mods |= Native.MOD_WIN;
-
-            if (key == Keys.ControlKey || key == Keys.ShiftKey || key == Keys.Menu || key == Keys.LWin || key == Keys.RWin)
-            {
-                Text = Hotkey.Describe(mods, 0) + " + …";
-                return;
-            }
-            if (mods == 0 && (key == Keys.Back || key == Keys.Delete))
-            {
-                SetValue(Hotkey.None);
-                return;
-            }
-            if (mods == 0 && key == Keys.Escape)
-            {
-                Text = value.ToString();
-                return;
-            }
-            bool functionKey = key >= Keys.F1 && key <= Keys.F24;
-            if (mods == 0 && !functionKey)
-            {
-                Text = "Usa Ctrl, Alt, Mayús o Win";
-                return;
-            }
-            SetValue(new Hotkey(mods, (uint)key));
-        }
-
-        protected override void OnKeyUp(KeyEventArgs e)
-        {
-            base.OnKeyUp(e);
-            if (e.Modifiers == Keys.None && !WinDown() && Text.EndsWith("…")) Text = value.ToString();
-        }
-
-        protected override void OnLeave(EventArgs e)
-        {
-            base.OnLeave(e);
-            Text = value.ToString();
-        }
-
-        public void SetValue(Hotkey hotkey)
-        {
-            Value = hotkey;
-            if (ValueChanged != null) ValueChanged(this, EventArgs.Empty);
-        }
-    }
-
-    /// <summary>Lista editable de apps (nombre del programa) con un desplegable de las apps abiertas.</summary>
-    internal sealed class AppListEditor : TableLayoutPanel
-    {
-        readonly HashSet<string> target;
-        readonly ListBox list = new ListBox();
-        readonly ComboBox picker = new ComboBox();
-
-        public AppListEditor(HashSet<string> target, List<string> runningApps)
-        {
-            this.target = target;
-            AutoSize = true;
-            ColumnCount = 3;
-            Dock = DockStyle.Fill;
-
-            list.Height = 72;
-            list.Width = 340;
-            list.Sorted = true;
-            foreach (string app in target) list.Items.Add(app);
-            Controls.Add(list);
-            SetColumnSpan(list, 3);
-
-            picker.Width = 200;
-            picker.DropDownStyle = ComboBoxStyle.DropDown;   // se puede escribir un nombre a mano
-            foreach (string app in runningApps) picker.Items.Add(app);
-            Controls.Add(picker);
-
-            var add = new Button();
-            add.Text = "Añadir";
-            add.AutoSize = true;
-            add.Click += delegate
-            {
-                string app = picker.Text.Trim();
-                if (app.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) app = app.Substring(0, app.Length - 4);
-                if (app.Length == 0 || target.Contains(app)) return;
-                target.Add(app);
-                list.Items.Add(app);
-                picker.Text = "";
-            };
-            Controls.Add(add);
-
-            var remove = new Button();
-            remove.Text = "Quitar";
-            remove.AutoSize = true;
-            remove.Click += delegate
-            {
-                string app = list.SelectedItem as string;
-                if (app == null) return;
-                target.Remove(app);
-                list.Items.Remove(app);
-            };
-            Controls.Add(remove);
-        }
-    }
-
-    /// <summary>Ventana de ajustes (sigue el modo claro/oscuro de Windows).</summary>
+    /// <summary>
+    /// Ventana de ajustes al estilo de Configuración de Windows 11: menú lateral, tarjetas,
+    /// interruptores y tema claro/oscuro. Los cambios se aplican y guardan al momento.
+    /// </summary>
     internal sealed class SettingsForm : Form
     {
-        static readonly KeyValuePair<HotkeyAction, string>[] Rows =
+        static readonly string[] NavGlyphs = { "", "", "", "", "", "" };
+        static readonly string[] NavLabels = { "General", "Botón", "Atajos de teclado", "Transparencia", "Apps", "Acerca de" };
+
+        static readonly KeyValuePair<HotkeyAction, string>[] HotkeyRows =
         {
-            new KeyValuePair<HotkeyAction, string>(HotkeyAction.TogglePin, "Fijar / soltar la ventana activa"),
+            new KeyValuePair<HotkeyAction, string>(HotkeyAction.TogglePin, "Fijar o soltar la ventana activa"),
             new KeyValuePair<HotkeyAction, string>(HotkeyAction.OpacityDown, "Más transparente"),
             new KeyValuePair<HotkeyAction, string>(HotkeyAction.OpacityUp, "Menos transparente"),
             new KeyValuePair<HotkeyAction, string>(HotkeyAction.Ghost, "Modo fantasma (activar / quitar)"),
-            new KeyValuePair<HotkeyAction, string>(HotkeyAction.ToggleButton, "Mostrar / ocultar el botón"),
+            new KeyValuePair<HotkeyAction, string>(HotkeyAction.ToggleButton, "Mostrar u ocultar el botón"),
         };
-
-        static readonly Color ErrorLight = Color.Firebrick, ErrorDark = Color.FromArgb(255, 120, 120);
-        static readonly Color OkLight = Color.SeaGreen, OkDark = Color.FromArgb(120, 210, 150);
+        static readonly string[] HotkeyGlyphs = { "", "", "", "", "" };
 
         readonly Settings working;
         readonly List<string> runningApps;
-        readonly bool dark = Theme.AppsUseDark();
-        readonly Dictionary<HotkeyAction, HotkeyBox> boxes = new Dictionary<HotkeyAction, HotkeyBox>();
-        readonly Dictionary<HotkeyAction, Label> states = new Dictionary<HotkeyAction, Label>();
-        readonly CheckBox showButton = new CheckBox();
-        readonly CheckBox startup = new CheckBox();
-        readonly ComboBox sizeBox = new ComboBox();
-        readonly Button resetOffsets = new Button();
-        readonly Button save = new Button();
-        readonly Label error = new Label();
+        readonly Action<Settings> apply;
+        readonly Dictionary<HotkeyAction, Hotkey> shownHotkeys = new Dictionary<HotkeyAction, Hotkey>();
+        int pageIndex;
+        Panel host;
 
-        public Settings Result { get { return working; } }
+        /// <summary>Se lanza si "Buscar actualizaciones" encuentra una versión nueva.</summary>
+        public event Action<string> NewVersionFound;
 
-        public SettingsForm(Settings current, List<string> runningApps)
+        public SettingsForm(Settings current, List<string> runningApps, Action<Settings> apply)
         {
             working = current.Clone();
             this.runningApps = runningApps;
+            this.apply = apply;
+            foreach (KeyValuePair<HotkeyAction, Hotkey> pair in working.Hotkeys) shownHotkeys[pair.Key] = pair.Value;
 
-            Text = "Ajustes de PinTop " + Program.Version;
+            Text = "Ajustes de PinTop";
             Icon = Icons.CreateTrayIcon();
-            Font = SystemFonts.MessageBoxFont;
-            FormBorderStyle = FormBorderStyle.FixedDialog;
-            MaximizeBox = false;
-            MinimizeBox = false;
+            Font = Ui.Body;
             StartPosition = FormStartPosition.CenterScreen;
-            AutoSize = true;
-            AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            Padding = new Padding(12);
-
-            // Dos columnas: atajos y botón a la izquierda; resto a la derecha.
-            var root = new TableLayoutPanel();
-            root.AutoSize = true;
-            root.ColumnCount = 2;
-            root.Dock = DockStyle.Fill;
-            Controls.Add(root);
-
-            var left = NewColumn();
-            left.Controls.Add(BuildHotkeys());
-            left.Controls.Add(BuildButtonGroup());
-            var right = NewColumn();
-            right.Controls.Add(BuildFadeGroup());
-            right.Controls.Add(BuildAppsGroup());
-            right.Controls.Add(BuildGeneralGroup());
-            root.Controls.Add(left);
-            root.Controls.Add(right);
-            Control footer = BuildFooter();
-            root.Controls.Add(footer);
-            root.SetColumnSpan(footer, 2);
-
-            ValidateHotkeys();
-            if (dark) ApplyDark(this);
-            // Que no aparezca la primera casilla de atajo seleccionada al abrir.
-            Shown += delegate { ActiveControl = showButton; };
+            AutoScaleMode = AutoScaleMode.None;
+            ClientSize = new Size(Ui.S(940), Ui.S(640));
+            MinimumSize = new Size(Ui.S(760), Ui.S(520));
+            KeyPreview = true;
+            BuildUi();
         }
 
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
-            if (dark) Theme.UseDarkTitleBar(Handle, true);
+            Theme.StyleTitleBar(Handle, Palette.Current);
         }
 
-        static TableLayoutPanel NewColumn()
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
-            var col = new TableLayoutPanel();
-            col.AutoSize = true;
-            col.ColumnCount = 1;
-            col.Dock = DockStyle.Fill;
-            col.Margin = new Padding(0, 0, 10, 0);
-            return col;
-        }
-
-        Control BuildHotkeys()
-        {
-            GroupBox group = NewGroup("Atajos de teclado");
-            var table = new TableLayoutPanel();
-            table.AutoSize = true;
-            table.ColumnCount = 4;
-            table.Dock = DockStyle.Fill;
-
-            foreach (KeyValuePair<HotkeyAction, string> row in Rows)
+            // Esc cierra la ventana (salvo mientras se está escribiendo un atajo).
+            if (keyData == Keys.Escape && !(ActiveControl is KeycapBox))
             {
-                HotkeyAction action = row.Key;
-                var label = new Label();
-                label.Text = row.Value;
-                label.AutoSize = true;
-                label.Anchor = AnchorStyles.Left;
-
-                var box = new HotkeyBox();
-                box.Width = 170;
-                box.Value = working.Hotkeys.ContainsKey(action) ? working.Hotkeys[action] : Hotkey.None;
-                box.ValueChanged += delegate
-                {
-                    working.Hotkeys[action] = box.Value;
-                    ValidateHotkeys();
-                };
-                boxes[action] = box;
-
-                var clear = new Button();
-                clear.Text = "Quitar";
-                clear.AutoSize = true;
-                clear.Click += delegate { box.SetValue(Hotkey.None); };
-
-                var state = new Label();
-                state.AutoSize = true;
-                state.Anchor = AnchorStyles.Left;
-                state.MinimumSize = new Size(120, 0);
-                states[action] = state;
-
-                table.Controls.Add(label);
-                table.Controls.Add(box);
-                table.Controls.Add(clear);
-                table.Controls.Add(state);
+                Close();
+                return true;
             }
-
-            Label hint = Hint("Haz clic en una casilla y pulsa la combinación. Supr o Retroceso la borra.\n"
-                + "Evita Ctrl + Alt con teclas que usas con AltGr (@, #, €, [ ]...).");
-            table.Controls.Add(hint);
-            table.SetColumnSpan(hint, 4);
-
-            group.Controls.Add(table);
-            return group;
+            return base.ProcessCmdKey(ref msg, keyData);
         }
 
-        Control BuildButtonGroup()
+        /// <summary>(Re)construye toda la interfaz con la paleta actual (al abrir y al cambiar de tema).</summary>
+        void BuildUi()
         {
-            GroupBox group = NewGroup("Botón");
-            var flow = NewFlow();
+            Palette.Current = Palette.Create(Theme.IsDarkMode());
+            SuspendLayout();
+            foreach (Control c in new List<Control>(Controls.Cast())) c.Dispose();
+            Controls.Clear();
+            BackColor = Palette.Current.Window;
 
-            showButton.Text = "Mostrar el botón de la chincheta en la barra de título";
-            showButton.AutoSize = true;
-            showButton.Checked = working.ShowButton;
-            showButton.CheckedChanged += delegate { working.ShowButton = showButton.Checked; };
-            flow.Controls.Add(showButton);
-            flow.SetFlowBreak(showButton, true);
+            host = new Panel();
+            host.Dock = DockStyle.Fill;
+            host.BackColor = Palette.Current.Window;
+            Controls.Add(host);
 
-            var allWindows = new CheckBox();
-            allWindows.Text = "En todas las ventanas (si no, solo en la activa y en las fijadas)";
-            allWindows.AutoSize = true;
-            allWindows.Margin = new Padding(20, 0, 3, 3);
-            allWindows.Checked = working.AllWindows;
-            allWindows.Enabled = working.ShowButton;
-            allWindows.CheckedChanged += delegate { working.AllWindows = allWindows.Checked; };
-            showButton.CheckedChanged += delegate { allWindows.Enabled = showButton.Checked; };
-            flow.Controls.Add(allWindows);
-            flow.SetFlowBreak(allWindows, true);
+            var nav = new NavList(NavGlyphs, NavLabels, pageIndex);
+            nav.Dock = DockStyle.Left;
+            nav.Width = Ui.S(250);
+            nav.SelectedChanged += delegate { ShowPage(nav.SelectedIndex); };
+            Controls.Add(nav);
 
-            var border = new CheckBox();
-            border.Text = "Borde de color en las ventanas fijadas (Windows 11)";
-            border.AutoSize = true;
-            border.Checked = working.PinnedBorder;
-            border.CheckedChanged += delegate { working.PinnedBorder = border.Checked; };
-            flow.Controls.Add(border);
-            flow.SetFlowBreak(border, true);
+            ShowPage(pageIndex);
+            ResumeLayout();
+            if (IsHandleCreated) Theme.StyleTitleBar(Handle, Palette.Current);
+        }
 
-            var sizeLabel = new Label();
-            sizeLabel.Text = "Tamaño:";
-            sizeLabel.AutoSize = true;
-            sizeLabel.Margin = new Padding(3, 7, 3, 3);
-            flow.Controls.Add(sizeLabel);
+        void ShowPage(int index)
+        {
+            pageIndex = index;
+            host.SuspendLayout();
+            foreach (Control c in new List<Control>(host.Controls.Cast())) c.Dispose();
+            host.Controls.Clear();
+            Page page;
+            switch (index)
+            {
+                case 1: page = BuildButtonPage(); break;
+                case 2: page = BuildHotkeysPage(); break;
+                case 3: page = BuildTransparencyPage(); break;
+                case 4: page = BuildAppsPage(); break;
+                case 5: page = BuildAboutPage(); break;
+                default: page = BuildGeneralPage(); break;
+            }
+            page.Dock = DockStyle.Fill;
+            host.Controls.Add(page);
+            host.ResumeLayout();
+            page.Relayout();
+        }
 
-            sizeBox.DropDownStyle = ComboBoxStyle.DropDownList;
-            sizeBox.Items.AddRange(new object[] { "Pequeño", "Normal", "Grande" });
-            sizeBox.SelectedIndex = working.ButtonSize <= 20 ? 0 : working.ButtonSize >= 28 ? 2 : 1;
-            sizeBox.SelectedIndexChanged += delegate { working.ButtonSize = new[] { 20, 24, 28 }[sizeBox.SelectedIndex]; };
-            flow.Controls.Add(sizeBox);
-            flow.SetFlowBreak(sizeBox, true);
+        void Changed()
+        {
+            apply(working.Clone());
+        }
 
-            resetOffsets.AutoSize = true;
-            resetOffsets.Click += delegate
+        static ToggleSwitch Toggle(bool value, Action<bool> onChange)
+        {
+            var t = new ToggleSwitch(value);
+            t.CheckedChanged += delegate { onChange(t.Checked); };
+            return t;
+        }
+
+        // ─────────────────────────── Páginas ───────────────────────────
+
+        Page BuildGeneralPage()
+        {
+            var page = new Page("General");
+
+            var theme = new Segmented(working.ThemeMode, "Como Windows", "Claro", "Oscuro");
+            theme.SelectedChanged += delegate
+            {
+                working.ThemeMode = theme.SelectedIndex;
+                Theme.Mode = working.ThemeMode;
+                Changed();
+                BeginInvoke(new Action(BuildUi));   // repintar todo con el nuevo tema
+            };
+            page.Section("Apariencia").Card(new Card()
+                .Add(new Row("", "Tema", "Ventana de ajustes y menús", theme)));
+
+            page.Section("Inicio").Card(new Card()
+                .Add(new Row("", "Iniciar PinTop con Windows", "Se abre solo al encender el ordenador",
+                    Toggle(Startup.IsEnabled(), on =>
+                    {
+                        try { Startup.Set(on); }
+                        catch (Exception ex) { MessageBox.Show(this, "No se pudo cambiar: " + ex.Message, "PinTop"); }
+                    })))
+                .Add(new Row("", "Avisarme si hay una versión nueva",
+                    "Consulta una vez al día la página de versiones de PinTop en GitHub",
+                    Toggle(working.CheckUpdates, on => { working.CheckUpdates = on; Changed(); }))));
+
+            page.Note("Los cambios se guardan automáticamente.");
+            return page;
+        }
+
+        Page BuildButtonPage()
+        {
+            var page = new Page("Botón");
+            Row allRow = null;
+            ToggleSwitch all = Toggle(working.AllWindows, on => { working.AllWindows = on; Changed(); });
+            all.Enabled = working.ShowButton;
+            ToggleSwitch show = Toggle(working.ShowButton, on =>
+            {
+                working.ShowButton = on;
+                all.Enabled = on;
+                allRow.Dimmed = !on;
+                allRow.Invalidate();
+                Changed();
+            });
+            allRow = new Row("", "En todas las ventanas", "Si lo desactivas, solo aparece en la ventana activa y en las fijadas", all);
+            allRow.Dimmed = !working.ShowButton;
+
+            var size = new Segmented(working.ButtonSize <= 20 ? 0 : working.ButtonSize >= 28 ? 2 : 1, "Pequeño", "Normal", "Grande");
+            size.SelectedChanged += delegate { working.ButtonSize = new[] { 20, 24, 28 }[size.SelectedIndex]; Changed(); };
+
+            page.Section("Chincheta").Card(new Card()
+                .Add(new Row("", "Mostrar la chincheta en la barra de título", null, show))
+                .Add(allRow)
+                .Add(new Row("", "Tamaño", null, size)));
+
+            page.Section("Ventanas fijadas").Card(new Card()
+                .Add(new Row("", "Borde de color", "Marca las ventanas fijadas con el color de acento de Windows (Windows 11)",
+                    Toggle(working.PinnedBorder, on => { working.PinnedBorder = on; Changed(); }))));
+
+            var reset = new ModernButton("Restablecer");
+            reset.Enabled = working.Offsets.Count > 0;
+            var resetRow = new Row("", "Posiciones movidas a mano",
+                working.Offsets.Count == 0 ? "No has movido el botón en ninguna app"
+                    : "Has movido el botón en " + working.Offsets.Count + (working.Offsets.Count == 1 ? " app" : " apps")
+                      + ": " + string.Join(", ", new List<string>(working.Offsets.Keys).ToArray()),
+                reset);
+            reset.Click += delegate
             {
                 working.Offsets.Clear();
-                UpdateResetText();
+                Changed();
+                ShowPage(pageIndex);
             };
-            UpdateResetText();
-            flow.Controls.Add(resetOffsets);
-            flow.SetFlowBreak(resetOffsets, true);
-
-            flow.Controls.Add(Hint("Rueda del ratón sobre el botón: cambia la transparencia.\n"
-                + "Arrastra el botón para moverlo; la posición se recuerda en cada app."));
-
-            group.Controls.Add(flow);
-            return group;
+            page.Section("Posición").Card(new Card().Add(resetRow));
+            page.Note("Arrastra la chincheta para moverla; la posición se recuerda en cada app. "
+                + "Con la rueda del ratón sobre ella cambias la transparencia.");
+            return page;
         }
 
-        void UpdateResetText()
+        Page BuildHotkeysPage()
         {
-            resetOffsets.Text = "Restablecer botones movidos a mano (" + working.Offsets.Count + " apps)";
-            resetOffsets.Enabled = working.Offsets.Count > 0;
-        }
+            var page = new Page("Atajos de teclado");
+            var card = new Card();
+            var statuses = new Dictionary<HotkeyAction, Row>();
+            var boxes = new Dictionary<HotkeyAction, KeycapBox>();
 
-        Control BuildFadeGroup()
-        {
-            GroupBox group = NewGroup("Atenuar ventanas fijadas");
-            var flow = NewFlow();
-
-            var enable = new CheckBox();
-            enable.Text = "Atenuar las ventanas fijadas cuando no las uso";
-            enable.AutoSize = true;
-            enable.Checked = working.FadeEnabled;
-            flow.Controls.Add(enable);
-            flow.SetFlowBreak(enable, true);
-
-            var levelLabel = new Label();
-            levelLabel.Text = "Opacidad al atenuar:";
-            levelLabel.AutoSize = true;
-            levelLabel.Margin = new Padding(20, 7, 3, 3);
-            flow.Controls.Add(levelLabel);
-
-            var level = new ComboBox();
-            level.DropDownStyle = ComboBoxStyle.DropDownList;
-            level.Width = 80;
-            int[] levels = { 20, 30, 40, 50, 60, 70 };
-            int selected = 2;
-            for (int i = 0; i < levels.Length; i++)
+            for (int i = 0; i < HotkeyRows.Length; i++)
             {
-                level.Items.Add(levels[i] + " %");
-                if (levels[i] == working.FadePercent) selected = i;
+                HotkeyAction action = HotkeyRows[i].Key;
+                Hotkey current;
+                shownHotkeys.TryGetValue(action, out current);
+
+                var box = new KeycapBox(current);
+                var clear = new ModernButton("", false, "");
+                boxes[action] = box;
+
+                // Acompañante: teclas + botón de borrar, alineados a la derecha.
+                var strip = new Panel();
+                strip.BackColor = Palette.Current.Card;
+                strip.Size = new Size(box.Width + Ui.S(8) + clear.Width, box.Height);
+                box.Location = new Point(0, 0);
+                clear.Location = new Point(box.Right + Ui.S(8), (box.Height - clear.Height) / 2);
+                strip.Controls.Add(box);
+                strip.Controls.Add(clear);
+
+                box.ValueChanged += delegate { OnHotkeyEdited(action, box.Value, boxes, statuses); };
+                clear.Click += delegate { box.Value = Hotkey.None; OnHotkeyEdited(action, Hotkey.None, boxes, statuses); };
+
+                // El estado ("✓ Disponible", "Repetido"...) se muestra debajo del nombre.
+                var row = new Row(HotkeyGlyphs[i], HotkeyRows[i].Value, " ", strip);
+                statuses[action] = row;
+                card.Add(row);
             }
-            level.SelectedIndex = selected;
-            level.SelectedIndexChanged += delegate { working.FadePercent = levels[level.SelectedIndex]; };
-            flow.Controls.Add(level);
-            flow.SetFlowBreak(level, true);
-
-            level.Enabled = levelLabel.Enabled = enable.Checked;
-            enable.CheckedChanged += delegate
-            {
-                working.FadeEnabled = enable.Checked;
-                level.Enabled = levelLabel.Enabled = enable.Checked;
-            };
-
-            flow.Controls.Add(Hint("Se vuelven transparentes mientras el ratón no está encima\n"
-                + "y recuperan su opacidad al pasar el ratón o activarlas."));
-            group.Controls.Add(flow);
-            return group;
+            page.Card(card);
+            page.Note("Haz clic en una casilla y pulsa la combinación. Supr o Retroceso la borra; Esc cancela.\n"
+                + "Evita Ctrl + Alt con teclas que usas con AltGr (@, #, €, [ ]...): dejarías de poder escribirlas.");
+            ValidateHotkeys(boxes, statuses);
+            return page;
         }
 
-        Control BuildAppsGroup()
+        void OnHotkeyEdited(HotkeyAction action, Hotkey value, Dictionary<HotkeyAction, KeycapBox> boxes,
+            Dictionary<HotkeyAction, Row> statuses)
         {
-            GroupBox group = NewGroup("Apps");
-            var table = new TableLayoutPanel();
-            table.AutoSize = true;
-            table.ColumnCount = 1;
-            table.Dock = DockStyle.Fill;
-
-            table.Controls.Add(Title("Fijar siempre (se fijan solas al abrirse):"));
-            table.Controls.Add(new AppListEditor(working.AutoPinApps, runningApps));
-            table.Controls.Add(Title("No mostrar el botón en:"));
-            table.Controls.Add(new AppListEditor(working.ExcludedApps, runningApps));
-            table.Controls.Add(Hint("Elige una app abierta en el desplegable o escribe su nombre."));
-
-            group.Controls.Add(table);
-            return group;
+            shownHotkeys[action] = value;
+            ValidateHotkeys(boxes, statuses);
         }
 
-        Control BuildGeneralGroup()
+        /// <summary>Marca repetidos y ocupados; solo se guardan las combinaciones válidas.</summary>
+        void ValidateHotkeys(Dictionary<HotkeyAction, KeycapBox> boxes, Dictionary<HotkeyAction, Row> statuses)
         {
-            GroupBox group = NewGroup("General");
-            var flow = NewFlow();
-            startup.Text = "Iniciar PinTop con Windows";
-            startup.AutoSize = true;
-            startup.Checked = Startup.IsEnabled();
-            flow.Controls.Add(startup);
-            flow.SetFlowBreak(startup, true);
-
-            var updates = new CheckBox();
-            updates.Text = "Avisarme si hay una versión nueva (consulta GitHub)";
-            updates.AutoSize = true;
-            updates.Checked = working.CheckUpdates;
-            updates.CheckedChanged += delegate { working.CheckUpdates = updates.Checked; };
-            flow.Controls.Add(updates);
-
-            group.Controls.Add(flow);
-            return group;
-        }
-
-        Control BuildFooter()
-        {
-            var panel = new TableLayoutPanel();
-            panel.AutoSize = true;
-            panel.ColumnCount = 3;
-            panel.Dock = DockStyle.Fill;
-            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            panel.Margin = new Padding(0, 8, 0, 0);
-
-            var info = new FlowLayoutPanel();
-            info.AutoSize = true;
-            info.FlowDirection = FlowDirection.TopDown;
-            var link = new LinkLabel();
-            link.Text = "github.com/ivanbg111/PinTop";
-            link.AutoSize = true;
-            link.LinkClicked += delegate { Process.Start("https://github.com/ivanbg111/PinTop"); };
-            info.Controls.Add(link);
-            error.AutoSize = true;
-            info.Controls.Add(error);
-            panel.Controls.Add(info);
-
-            save.Text = "Guardar";
-            save.AutoSize = true;
-            save.MinimumSize = new Size(90, 0);
-            save.Click += delegate
-            {
-                try
-                {
-                    if (startup.Checked != Startup.IsEnabled()) Startup.Set(startup.Checked);
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show(this, "No se pudo cambiar el inicio con Windows: " + ex.Message, "PinTop");
-                }
-                DialogResult = DialogResult.OK;
-                Close();
-            };
-            AcceptButton = save;
-            panel.Controls.Add(save);
-
-            var cancel = new Button();
-            cancel.Text = "Cancelar";
-            cancel.AutoSize = true;
-            cancel.MinimumSize = new Size(90, 0);
-            cancel.Click += delegate { Close(); };   // ventana no modal: hay que cerrarla a mano
-            CancelButton = cancel;
-            panel.Controls.Add(cancel);
-            return panel;
-        }
-
-        /// <summary>Marca combinaciones repetidas o ya usadas por otra app y bloquea Guardar si las hay.</summary>
-        void ValidateHotkeys()
-        {
-            bool ok = true;
-            foreach (KeyValuePair<HotkeyAction, HotkeyBox> pair in boxes)
+            Palette p = Palette.Current;
+            bool changed = false;
+            foreach (KeyValuePair<HotkeyAction, KeycapBox> pair in boxes)
             {
                 Hotkey hk = pair.Value.Value;
-                Label state = states[pair.Key];
+                Row status = statuses[pair.Key];
+                bool valid = true;
                 if (hk.IsEmpty)
                 {
-                    state.Text = "";
-                    continue;
-                }
-                bool duplicate = false;
-                foreach (KeyValuePair<HotkeyAction, HotkeyBox> other in boxes)
-                    if (other.Key != pair.Key && other.Value.Value.SameAs(hk)) duplicate = true;
-
-                if (duplicate)
-                {
-                    state.Text = "Repetido";
-                    state.ForeColor = dark ? ErrorDark : ErrorLight;
-                    ok = false;
-                }
-                else if (!HotkeyWindow.IsAvailable(hk))
-                {
-                    state.Text = "Ya la usa otra app";
-                    state.ForeColor = dark ? ErrorDark : ErrorLight;
-                    ok = false;
+                    status.SetDescription("Sin atajo", null);
                 }
                 else
                 {
-                    state.Text = "✓ Disponible";
-                    state.ForeColor = dark ? OkDark : OkLight;
+                    bool duplicate = false;
+                    foreach (KeyValuePair<HotkeyAction, KeycapBox> other in boxes)
+                        if (other.Key != pair.Key && other.Value.Value.SameAs(hk)) duplicate = true;
+                    if (duplicate) { status.SetDescription("Repetido: elige otra combinación", p.Danger); valid = false; }
+                    else if (!HotkeyWindow.IsAvailable(hk)) { status.SetDescription("Ya la usa otra app: elige otra", p.Danger); valid = false; }
+                    else status.SetDescription("✓ Disponible", p.Success);
+                }
+                Hotkey saved;
+                working.Hotkeys.TryGetValue(pair.Key, out saved);
+                if (valid && !saved.SameAs(hk))
+                {
+                    working.Hotkeys[pair.Key] = hk;
+                    changed = true;
                 }
             }
-            save.Enabled = ok;
-            error.Text = ok ? "" : "Corrige los atajos marcados en rojo para poder guardar.";
-            error.ForeColor = dark ? ErrorDark : ErrorLight;
+            if (changed) Changed();
         }
 
-        Label Hint(string text)
+        Page BuildTransparencyPage()
         {
-            var hint = new Label();
-            hint.AutoSize = true;
-            hint.MaximumSize = new Size(520, 0);
-            hint.ForeColor = dark ? Theme.DarkMuted : SystemColors.GrayText;
-            hint.Margin = new Padding(3, 6, 3, 0);
-            hint.Text = text;
-            hint.Tag = "hint";
-            return hint;
+            var page = new Page("Transparencia");
+            int[] levels = { 20, 30, 40, 50, 60, 70 };
+            int selected = Array.IndexOf(levels, working.FadePercent);
+            var level = new Segmented(selected < 0 ? 2 : selected, "20 %", "30 %", "40 %", "50 %", "60 %", "70 %");
+            level.Enabled = working.FadeEnabled;
+            level.SelectedChanged += delegate { working.FadePercent = levels[level.SelectedIndex]; Changed(); };
+            var levelRow = new Row("", "Opacidad al atenuar", null, level);
+            levelRow.Dimmed = !working.FadeEnabled;
+
+            page.Section("Atenuar ventanas fijadas").Card(new Card()
+                .Add(new Row("", "Atenuar las ventanas fijadas cuando no las uso",
+                    "Se vuelven transparentes mientras el ratón no está encima y recuperan su opacidad al pasar el ratón o activarlas",
+                    Toggle(working.FadeEnabled, on =>
+                    {
+                        working.FadeEnabled = on;
+                        level.Enabled = on;
+                        levelRow.Dimmed = !on;
+                        levelRow.Invalidate();
+                        Changed();
+                    })))
+                .Add(levelRow));
+
+            Hotkey ghost;
+            working.Hotkeys.TryGetValue(HotkeyAction.Ghost, out ghost);
+            page.Section("Otras formas").Card(new Card()
+                .Add(new Row("", "Rueda del ratón sobre la chincheta",
+                    "Sube o baja la transparencia de esa ventana de 10 en 10 %", null))
+                .Add(new Row("", "Modo fantasma",
+                    "La ventana fijada deja pasar los clics a lo que hay debajo. Clic derecho en su chincheta"
+                    + (ghost.IsEmpty ? "" : " o " + ghost) + " para activarlo o quitarlo", null)));
+            return page;
         }
 
-        static Label Title(string text)
+        Page BuildAppsPage()
         {
-            var label = new Label();
-            label.AutoSize = true;
-            label.Margin = new Padding(3, 6, 3, 2);
-            label.Text = text;
-            return label;
+            var page = new Page("Apps");
+            Func<List<string>> apps = () => runningApps;
+            page.Section("Fijar siempre").Note("Sus ventanas se fijan solas al abrirse, también después de reiniciar.");
+            page.Card(new Card().Add(new ChipList(working.AutoPinApps, apps, Changed)));
+            page.Section("No mostrar el botón en").Note("En estas apps nunca aparece la chincheta (por ejemplo juegos o apps donde estorba).");
+            page.Card(new Card().Add(new ChipList(working.ExcludedApps, apps, Changed)));
+            return page;
         }
 
-        static GroupBox NewGroup(string title)
+        Page BuildAboutPage()
         {
-            var group = new GroupBox();
-            group.Text = title;
-            group.AutoSize = true;
-            group.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            group.Dock = DockStyle.Fill;
-            group.Padding = new Padding(10, 6, 10, 8);
-            group.Margin = new Padding(0, 0, 0, 10);
-            return group;
-        }
+            var page = new Page("Acerca de");
 
-        static FlowLayoutPanel NewFlow()
-        {
-            var flow = new FlowLayoutPanel();
-            flow.AutoSize = true;
-            flow.Dock = DockStyle.Fill;
-            flow.FlowDirection = FlowDirection.LeftToRight;
-            return flow;
-        }
+            var github = new ModernButton("Ver en GitHub", true, "");
+            github.Click += delegate { OpenUrl("https://github.com/ivanbg111/PinTop"); };
 
-        /// <summary>Colores oscuros para toda la ventana (WinForms no los aplica solo).</summary>
-        static void ApplyDark(Control control)
-        {
-            if (control is Form || control is GroupBox || control is Panel || control is Label || control is CheckBox)
+            var status = new TextLabel("", TextLabel.Kind.Sub);
+            var check = new ModernButton("Buscar actualizaciones", false, "");
+            check.Click += delegate
             {
-                control.BackColor = Theme.DarkBack;
-                if (!(control is Label && (string)control.Tag == "hint")) control.ForeColor = Theme.DarkText;
-            }
-            var button = control as Button;
-            if (button != null)
-            {
-                button.FlatStyle = FlatStyle.Flat;
-                button.FlatAppearance.BorderColor = Theme.DarkBorder;
-                button.BackColor = Theme.DarkSurface;
-                button.ForeColor = Theme.DarkText;
-            }
-            if (control is TextBox || control is ComboBox || control is ListBox)
-            {
-                control.BackColor = Theme.DarkSurface;
-                control.ForeColor = Theme.DarkText;
-                var combo = control as ComboBox;
-                if (combo != null) combo.FlatStyle = FlatStyle.Flat;
-                var list = control as ListBox;
-                if (list != null) list.BorderStyle = BorderStyle.FixedSingle;
-            }
-            var link = control as LinkLabel;
-            if (link != null)
-            {
-                link.LinkColor = Color.FromArgb(120, 180, 255);
-                link.ActiveLinkColor = Color.FromArgb(160, 205, 255);
-            }
-            foreach (Control child in control.Controls) ApplyDark(child);
+                status.Set("Comprobando…", TextLabel.Kind.Sub);
+                status.Fit(0);
+                check.Enabled = false;
+                Updater.CheckAsync(
+                    v => BeginInvoke(new Action(() =>
+                    {
+                        status.Set("Hay una versión nueva: " + v, TextLabel.Kind.Success);
+                        status.Fit(0);
+                        check.Enabled = true;
+                        if (NewVersionFound != null) NewVersionFound(v);
+                    })),
+                    () => BeginInvoke(new Action(() => { status.Set("Tienes la última versión", TextLabel.Kind.Success); status.Fit(0); check.Enabled = true; })),
+                    () => BeginInvoke(new Action(() => { status.Set("No se pudo comprobar (¿sin conexión?)", TextLabel.Kind.Danger); status.Fit(0); check.Enabled = true; })));
+            };
+
+            var about = new Card()
+                .Add(new Row("", "PinTop " + Program.Version,
+                    "Fija cualquier ventana encima de todo con un botón en su barra de título. Licencia MIT.", github))
+                .Add(new Row("", "Actualizaciones", null, check));
+            page.Card(about);
+            page.Add(status, Ui.S(10));
+            page.Note("Si algo no funciona bien, puedes contarlo en GitHub (pestaña Issues).");
+            return page;
+        }
+
+        static void OpenUrl(string url)
+        {
+            try { Process.Start(url); } catch (Exception) { }
+        }
+    }
+
+    internal static class ControlExtensions
+    {
+        /// <summary>Copia la colección de controles para poder recorrerla mientras se modifica.</summary>
+        public static IEnumerable<Control> Cast(this Control.ControlCollection controls)
+        {
+            var list = new List<Control>();
+            foreach (Control c in controls) list.Add(c);
+            return list;
         }
     }
 }

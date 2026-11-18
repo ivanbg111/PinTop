@@ -133,6 +133,8 @@ namespace PinTop
         public const int DWMWA_CLOAKED = 14;
         public const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
         public const int DWMWA_BORDER_COLOR = 34;
+        public const int DWMWA_CAPTION_COLOR = 35;
+        public const int DWMWA_TEXT_COLOR = 36;
         public const uint DWMWA_COLOR_DEFAULT = 0xFFFFFFFF;
 
         [DllImport("dwmapi.dll")]
