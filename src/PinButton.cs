@@ -1,30 +1,31 @@
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
-using System.Drawing.Text;
 using System.Windows.Forms;
 
 namespace PinTop
 {
     /// <summary>
     /// El botón flotante que se dibuja sobre la barra de título de la ventana activa.
-    /// Nunca roba el foco: la ventana de debajo sigue siendo la activa.
+    /// Toma el color de la barra para integrarse, nunca roba el foco y se puede arrastrar.
     /// </summary>
     internal sealed class PinButton : Form
     {
-        static readonly Color Accent = Color.FromArgb(0, 120, 215);
-        static readonly Color AccentHover = Color.FromArgb(40, 145, 235);
-        static readonly Color Idle = Color.FromArgb(52, 52, 52);
-        static readonly Color IdleHover = Color.FromArgb(85, 85, 85);
-
-        const string GlyphPin = "";       // Segoe MDL2 Assets: Pin
-        const string GlyphPinned = "";    // Segoe MDL2 Assets: PinnedFill
-
         readonly ToolTip tip = new ToolTip();
-        Font glyphFont;
+        Color baseColor = Color.FromArgb(32, 32, 32);
+        Color accent = Theme.Accent();
+        string hotkeyText = "";
         bool pinned, hover, shown;
 
+        // Arrastre
+        bool pressing, dragging;
+        int pressScreenX, pressLeft;
+
+        /// <summary>Rango permitido para la X izquierda del botón al arrastrarlo.</summary>
+        public int DragMin, DragMax;
+
         public event EventHandler PinClicked;
+        public event Action<int> DragEnded;
 
         public PinButton()
         {
@@ -34,7 +35,7 @@ namespace PinTop
             AutoScaleMode = AutoScaleMode.None;
             TopMost = true;
             DoubleBuffered = true;
-            BackColor = Idle;
+            BackColor = baseColor;
             Text = "PinTop";
             Bounds = new Rectangle(-32000, -32000, 24, 24);
             tip.ShowAlways = true;
@@ -43,6 +44,8 @@ namespace PinTop
             Show();                 // crea la ventana sin activarla (ShowWithoutActivation)
             Native.ShowWindow(Handle, Native.SW_HIDE);
         }
+
+        public bool IsShown { get { return shown; } }
 
         protected override bool ShowWithoutActivation { get { return true; } }
 
@@ -67,9 +70,25 @@ namespace PinTop
             base.WndProc(ref m);
         }
 
+        public void SetHotkeyText(string text)
+        {
+            hotkeyText = text;
+            UpdateTooltip();
+        }
+
+        /// <summary>Color de la barra de título sobre la que está el botón.</summary>
+        public void SetBaseColor(Color color)
+        {
+            accent = Theme.Accent();
+            if (color.ToArgb() == baseColor.ToArgb()) return;
+            baseColor = color;
+            Invalidate();
+        }
+
         /// <summary>Coloca el botón en <paramref name="bounds"/> (pantalla) por encima de todo.</summary>
         public void ShowAt(Rectangle bounds, bool isPinned)
         {
+            if (dragging) return;
             if (isPinned != pinned)
             {
                 pinned = isPinned;
@@ -92,46 +111,43 @@ namespace PinTop
             Native.ShowWindow(Handle, Native.SW_HIDE);
             shown = false;
             hover = false;
+            pressing = dragging = false;
         }
 
         void UpdateTooltip()
         {
-            tip.SetToolTip(this, pinned
-                ? "Soltar ventana (Ctrl+Alt+P)\nClic derecho: transparencia"
-                : "Fijar encima de todo (Ctrl+Alt+P)\nClic derecho: transparencia");
+            string action = pinned ? "Soltar ventana" : "Fijar encima de todo";
+            if (hotkeyText.Length > 0) action += " (" + hotkeyText + ")";
+            tip.SetToolTip(this, action + "\nArrástralo para moverlo · Clic derecho: más opciones");
         }
 
         protected override void OnResize(EventArgs e)
         {
             base.OnResize(e);
             if (ClientSize.Width <= 0 || ClientSize.Height <= 0) return;
-
-            int radius = Math.Max(4, ClientSize.Height / 4);
-            using (var path = RoundedRect(new Rectangle(Point.Empty, ClientSize), radius))
+            int radius = Math.Max(3, ClientSize.Height / 5);
+            using (GraphicsPath path = RoundedRect(new Rectangle(Point.Empty, ClientSize), radius))
             {
                 Region = new Region(path);
             }
-
-            if (glyphFont != null) glyphFont.Dispose();
-            glyphFont = new Font("Segoe MDL2 Assets", Math.Max(8f, ClientSize.Height * 0.5f), GraphicsUnit.Pixel);
             Invalidate();
         }
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            Graphics g = e.Graphics;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-            g.Clear(pinned ? (hover ? AccentHover : Accent) : (hover ? IdleHover : Idle));
-
-            if (glyphFont == null) return;
-            using (var sf = new StringFormat())
+            Color back, ink;
+            if (pinned)
             {
-                sf.Alignment = StringAlignment.Center;
-                sf.LineAlignment = StringAlignment.Center;
-                g.DrawString(pinned ? GlyphPinned : GlyphPin, glyphFont, Brushes.White,
-                    new RectangleF(0, 1, ClientSize.Width, ClientSize.Height), sf);
+                back = hover ? Theme.Blend(accent, Color.White, 0.18f) : accent;
+                ink = Theme.InkFor(accent);
             }
+            else
+            {
+                ink = Theme.InkFor(baseColor);
+                back = hover ? Theme.Blend(baseColor, ink, 0.14f) : baseColor;
+            }
+            e.Graphics.Clear(back);
+            Glyphs.DrawPin(e.Graphics, new RectangleF(0, 0, ClientSize.Width, ClientSize.Height), ink, pinned);
         }
 
         protected override void OnMouseEnter(EventArgs e)
@@ -148,20 +164,57 @@ namespace PinTop
             Invalidate();
         }
 
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            if (e.Button != MouseButtons.Left) return;
+            pressing = true;
+            dragging = false;
+            pressScreenX = Cursor.Position.X;
+            pressLeft = Bounds.Left;
+            Capture = true;
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            if (!pressing) return;
+            int dx = Cursor.Position.X - pressScreenX;
+            if (!dragging && Math.Abs(dx) > 4)
+            {
+                dragging = true;
+                Cursor = Cursors.SizeWE;
+                tip.Hide(this);
+            }
+            if (dragging)
+            {
+                int left = Math.Max(DragMin, Math.Min(DragMax, pressLeft + dx));
+                Native.SetWindowPos(Handle, Native.HWND_TOPMOST, left, Bounds.Top, 0, 0,
+                    Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
+            }
+        }
+
         protected override void OnMouseUp(MouseEventArgs e)
         {
             base.OnMouseUp(e);
-            if (e.Button == MouseButtons.Left && ClientRectangle.Contains(e.Location) && PinClicked != null)
+            if (e.Button != MouseButtons.Left || !pressing) return;
+            pressing = false;
+            Capture = false;
+            if (dragging)
+            {
+                dragging = false;
+                Cursor = Cursors.Default;
+                if (DragEnded != null) DragEnded(Bounds.Left);
+            }
+            else if (ClientRectangle.Contains(e.Location) && PinClicked != null)
+            {
                 PinClicked(this, EventArgs.Empty);
+            }
         }
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing)
-            {
-                tip.Dispose();
-                if (glyphFont != null) glyphFont.Dispose();
-            }
+            if (disposing) tip.Dispose();
             base.Dispose(disposing);
         }
 

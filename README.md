@@ -1,7 +1,7 @@
 # 📌 PinTop
 
-Añade un botón **📌** a la barra de título de cualquier ventana de Windows para dejarla
-**siempre encima de todo**, aunque hagas clic en otra aplicación.
+Añade un botón con forma de chincheta a la barra de título de cualquier ventana de Windows para
+dejarla **siempre encima de todo**, aunque hagas clic en otra aplicación.
 
 Ideal para tener una ventana pequeña de referencia (un PDF, una web, un pedido, una calculadora…)
 flotando mientras rellenas datos en otra a pantalla completa, sin pantalla dividida.
@@ -10,22 +10,44 @@ flotando mientras rellenas datos en otra a pantalla completa, sin pantalla divid
 
 ## Funciones
 
-- **Botón 📌** junto a minimizar / maximizar / cerrar de la ventana activa.
-  - Gris = normal · Azul = fijada encima de todo.
-- **Atajo global `Ctrl + Alt + P`**: fija o suelta la ventana activa.
-- **Clic derecho en el botón → Opacidad** (100 % … 50 %) para ver lo que hay detrás.
-- Icono en la bandeja del sistema:
-  - Mostrar/ocultar el botón (también con doble clic en el icono).
-  - Soltar todas las ventanas fijadas.
-  - Iniciar con Windows.
+- **Botón de chincheta** junto a minimizar / maximizar / cerrar de la ventana activa.
+  - Toma el color de la barra de título de cada app para integrarse.
+  - Al fijar la ventana se pinta con el **color de acento de Windows**.
+  - Busca un hueco libre: no tapa los iconos propios de apps como Claude, Chrome o Bambu Studio.
+  - **Arrástralo** para moverlo; la posición se recuerda para cada app.
+- **Clic derecho en el botón**: opacidad (100 % … 30 %), volver a la posición automática y ajustes.
+- **Atajos de teclado configurables** (valores por defecto):
+  | Acción | Atajo |
+  | --- | --- |
+  | Fijar / soltar la ventana activa | `Ctrl + Alt + P` |
+  | Más transparente | `Ctrl + Alt + AvPág` |
+  | Menos transparente | `Ctrl + Alt + RePág` |
+  | Mostrar / ocultar el botón | (sin asignar) |
+- **Ventana de ajustes** (doble clic en el icono de la bandeja, o volver a abrir `PinTop.exe`):
+  atajos, tamaño del botón, mostrar/ocultar el botón e inicio con Windows.
 - Al salir, **devuelve todas las ventanas a su estado normal** (sin fijar y opacas).
 - Un único `.exe` pequeño, sin instalación ni dependencias.
 
 ## Uso
 
-1. Descarga o compila `PinTop.exe` y ejecútalo.
-2. Haz clic en cualquier ventana: aparecerá el botón 📌 en su barra de título.
-3. Púlsalo para fijarla. Vuelve a pulsarlo para soltarla.
+1. Descarga `PinTop.exe` desde [Releases](https://github.com/ivanbg111/PinTop/releases) y guárdalo
+   en una carpeta fija (por ejemplo `Documentos\PinTop`).
+2. Ábrelo. Aparece un icono junto al reloj y la chincheta en la barra de título de la ventana activa.
+3. Púlsala para fijar la ventana. Vuelve a pulsarla para soltarla.
+
+### Aviso de Windows SmartScreen
+
+La primera vez Windows puede decir *"Windows protegió tu PC"*. Pasa con cualquier programa nuevo
+que no está firmado con un certificado de pago: no significa que tenga nada malo.
+Pulsa **Más información → Ejecutar de todas formas**. Si lo prefieres, puedes compilarlo tú mismo
+desde el código (abajo); un `.exe` compilado en tu PC no muestra el aviso.
+
+## Línea de comandos
+
+| Comando | Qué hace |
+| --- | --- |
+| `PinTop.exe` | Inicia PinTop (si ya está abierto, abre sus ajustes). |
+| `PinTop.exe --exit` | Cierra PinTop limpiamente (suelta todas las ventanas). |
 
 ## Compilar
 
@@ -36,35 +58,37 @@ que trae Windows (.NET Framework 4.8).
 .\build.ps1
 ```
 
-El ejecutable queda en `bin\PinTop.exe`.
+El ejecutable queda en `bin\PinTop.exe`. `tools\make-icon.ps1` regenera `assets\pintop.ico`.
 
-`tools\make-icon.ps1` regenera `assets\pintop.ico` si se cambia el diseño del icono.
+**Diagnóstico:** con la variable de entorno `PINTOP_DEBUG=1`, PinTop escribe en `%TEMP%\PinTop\`
+un registro de cómo ha colocado el botón en cada ventana y la franja de barra de título analizada.
 
 ## Cómo funciona
 
 | Archivo | Qué hace |
 | --- | --- |
-| `src/Program.cs` | Punto de entrada; evita abrir dos instancias. |
-| `src/TrayApp.cs` | Icono de bandeja, menús, atajo de teclado y seguimiento de la ventana activa con `SetWinEventHook`. |
-| `src/PinButton.cs` | El botón flotante: una ventana sin bordes que nunca roba el foco (`WS_EX_NOACTIVATE`). |
-| `src/WindowManager.cs` | Decide en qué ventanas mostrar el botón, calcula su posición (`DWMWA_CAPTION_BUTTON_BOUNDS`), fija (`HWND_TOPMOST`) y aplica opacidad (`SetLayeredWindowAttributes`). |
-| `src/Support.cs` | Atajo global, arranque con Windows e icono de la bandeja. |
-| `src/Native.cs` | Declaraciones de la API de Win32. |
+| `src/TrayApp.cs` | Núcleo: bandeja, menús, atajos y seguimiento de la ventana activa (`SetWinEventHook`). |
+| `src/CaptionProbe.cs` | Localiza los botones reales de la ventana con **UI Automation** (en un hilo aparte). |
+| `src/ScreenScan.cs` | Analiza los píxeles de la barra de título: hueco libre y color de fondo. |
+| `src/PinButton.cs` | El botón flotante: nunca roba el foco (`WS_EX_NOACTIVATE`) y se puede arrastrar. |
+| `src/WindowManager.cs` | Qué ventanas admiten botón, fijar (`HWND_TOPMOST`) y opacidad (`SetLayeredWindowAttributes`). |
+| `src/SettingsForm.cs` | Ventana de ajustes y captura de atajos. |
+| `src/Settings.cs` | Ajustes en `%APPDATA%\PinTop\settings.ini`. |
+| `src/Support.cs` | Atajos globales, inicio con Windows, colores y dibujo vectorial de la chincheta. |
+
+La posición del botón se decide así:
+1. Botones reales de la ventana según UI Automation (funciona en Chrome, Electron, apps de Windows 11…).
+2. Si no, la zona que informa Windows (DWM) o, en barras personalizadas, se busca el icono de minimizar en los píxeles.
+3. A la izquierda de esos botones se busca el primer hueco libre para no tapar nada.
+4. Si arrastraste el botón en esa app, manda tu posición.
 
 ## Limitaciones conocidas
 
 - Las ventanas de programas ejecutados **como administrador** solo se pueden fijar si PinTop
   también se ejecuta como administrador (restricción de seguridad de Windows).
-- En apps con barra de título personalizada (Chrome, Discord, Spotify…) el botón se coloca
-  estimando la posición de los botones estándar; en algunas puede quedar algo desplazado.
+- Si otra ventana "siempre visible" tapa la barra de título, el botón se coloca a su izquierda.
 - Algunas ventanas que ya usan transparencia propia no admiten el cambio de opacidad.
 - No se muestra en juegos o vídeos a pantalla completa.
-
-## Ideas para siguientes versiones
-
-- Modo "click-through" (que los clics atraviesen la ventana fijada).
-- Recordar qué aplicaciones fijar automáticamente.
-- Atajo de teclado configurable y color de acento del sistema.
 
 ## Licencia
 

@@ -73,43 +73,54 @@ namespace PinTop
             return true;
         }
 
-        /// <summary>Calcula, en píxeles de pantalla, dónde va el botón: a la izquierda de minimizar.</summary>
-        public static bool TryGetButtonBounds(IntPtr hwnd, out Rectangle bounds)
+        /// <summary>Borde visible de la ventana en píxeles de pantalla (sin la sombra invisible).</summary>
+        public static Rectangle GetFrameRect(IntPtr hwnd)
         {
-            bounds = Rectangle.Empty;
-            float scale = GetScale(hwnd);
-            Native.RECT frame = GetFrame(hwnd);
-            Native.RECT wr;
+            Native.RECT r = GetFrame(hwnd);
+            return Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom);
+        }
+
+        /// <summary>Zona de botones que informa Windows (solo fiable en ventanas con marco estándar).</summary>
+        public static bool TryGetDwmCaption(IntPtr hwnd, out Rectangle caption)
+        {
+            caption = Rectangle.Empty;
+            Native.RECT wr, cb;
             if (!Native.GetWindowRect(hwnd, out wr)) return false;
-
-            int capLeft, capTop, capHeight;
-            Native.RECT cb;
             if (Native.DwmGetWindowAttribute(hwnd, Native.DWMWA_CAPTION_BUTTON_BOUNDS, out cb,
-                    Marshal.SizeOf(typeof(Native.RECT))) == 0 && cb.Width > 0 && cb.Height > 0)
-            {
-                // Coordenadas relativas a la esquina de la ventana.
-                capLeft = wr.Left + cb.Left;
-                capTop = wr.Top + cb.Top;
-                capHeight = cb.Height;
-            }
-            else
-            {
-                // Barra de título personalizada: suponemos los 3 botones estándar de Windows 11.
-                int buttonWidth = (int)Math.Round(46 * scale);
-                capLeft = frame.Right - 3 * buttonWidth;
-                capTop = frame.Top;
-                capHeight = (int)Math.Round(32 * scale);
-            }
-
-            int size = (int)Math.Round(24 * scale);
-            int gap = (int)Math.Round(6 * scale);
-            int x = capLeft - gap - size;
-            int y = capTop + Math.Max(0, (capHeight - size) / 2);
-            if (y < frame.Top) y = frame.Top;
-            if (x < frame.Left) return false;
-
-            bounds = new Rectangle(x, y, size, size);
+                    Marshal.SizeOf(typeof(Native.RECT))) != 0 || cb.Width <= 0 || cb.Height <= 0)
+                return false;
+            // Coordenadas relativas a la esquina de la ventana.
+            caption = new Rectangle(wr.Left + cb.Left, wr.Top + cb.Top, cb.Width, cb.Height);
             return true;
+        }
+
+        /// <summary>Último recurso: los 3 botones estándar de Windows 11.</summary>
+        public static Rectangle EstimateCaption(Rectangle frame, float scale)
+        {
+            int w = (int)Math.Round(46 * scale);
+            return new Rectangle(frame.Right - 3 * w, frame.Top, 3 * w, (int)Math.Round(32 * scale));
+        }
+
+        /// <summary>Nombre del programa (para recordar ajustes por app).</summary>
+        public static string GetAppName(IntPtr hwnd)
+        {
+            uint pid;
+            Native.GetWindowThreadProcessId(hwnd, out pid);
+
+            // Apps de la Tienda: la ventana es de ApplicationFrameHost; la app real es la ventana hija.
+            if (GetClassName(hwnd) == "ApplicationFrameWindow")
+            {
+                IntPtr core = Native.FindWindowEx(hwnd, IntPtr.Zero, "Windows.UI.Core.CoreWindow", null);
+                if (core != IntPtr.Zero) Native.GetWindowThreadProcessId(core, out pid);
+            }
+            try
+            {
+                using (Process p = Process.GetProcessById((int)pid)) return p.ProcessName;
+            }
+            catch (Exception)
+            {
+                return GetClassName(hwnd);
+            }
         }
 
         public static bool IsPinned(IntPtr hwnd)
@@ -201,7 +212,7 @@ namespace PinTop
             return r;
         }
 
-        static float GetScale(IntPtr hwnd)
+        public static float GetScale(IntPtr hwnd)
         {
             try
             {

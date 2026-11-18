@@ -1,17 +1,19 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
-using System.Drawing.Text;
+using System.Drawing.Imaging;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
 namespace PinTop
 {
-    /// <summary>Ventana invisible que recibe el atajo de teclado global.</summary>
+    /// <summary>Ventana invisible que recibe los atajos de teclado globales.</summary>
     internal sealed class HotkeyWindow : NativeWindow, IDisposable
     {
-        readonly System.Collections.Generic.List<int> ids = new System.Collections.Generic.List<int>();
+        readonly List<int> ids = new List<int>();
 
         public event Action<int> Pressed;
 
@@ -22,10 +24,27 @@ namespace PinTop
             CreateHandle(cp);
         }
 
-        public bool Register(int id, uint modifiers, uint key)
+        public bool Register(int id, Hotkey hotkey)
         {
-            if (!Native.RegisterHotKey(Handle, id, modifiers, key)) return false;
+            if (hotkey.IsEmpty) return true;
+            if (!Native.RegisterHotKey(Handle, id, hotkey.Modifiers | Native.MOD_NOREPEAT, hotkey.Key)) return false;
             ids.Add(id);
+            return true;
+        }
+
+        public void UnregisterAll()
+        {
+            foreach (int id in ids) Native.UnregisterHotKey(Handle, id);
+            ids.Clear();
+        }
+
+        /// <summary>¿Está libre esta combinación? (otra app no la tiene ya registrada)</summary>
+        public static bool IsAvailable(Hotkey hotkey)
+        {
+            if (hotkey.IsEmpty) return true;
+            const int probeId = 0xBFF0;
+            if (!Native.RegisterHotKey(IntPtr.Zero, probeId, hotkey.Modifiers | Native.MOD_NOREPEAT, hotkey.Key)) return false;
+            Native.UnregisterHotKey(IntPtr.Zero, probeId);
             return true;
         }
 
@@ -37,8 +56,7 @@ namespace PinTop
 
         public void Dispose()
         {
-            foreach (int id in ids) Native.UnregisterHotKey(Handle, id);
-            ids.Clear();
+            UnregisterAll();
             DestroyHandle();
         }
     }
@@ -48,6 +66,8 @@ namespace PinTop
     {
         const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
         const string ValueName = "PinTop";
+
+        static string Command { get { return "\"" + Application.ExecutablePath + "\""; } }
 
         public static bool IsEnabled()
         {
@@ -61,39 +81,173 @@ namespace PinTop
         {
             using (RegistryKey key = Registry.CurrentUser.CreateSubKey(RunKey))
             {
-                if (enabled) key.SetValue(ValueName, "\"" + Application.ExecutablePath + "\"");
+                if (enabled) key.SetValue(ValueName, Command);
                 else key.DeleteValue(ValueName, false);
+            }
+        }
+
+        /// <summary>Si estaba activado desde otra ruta (p. ej. se movió el .exe), apunta a la actual.</summary>
+        public static void RefreshPath()
+        {
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(RunKey, true))
+            {
+                if (key == null) return;
+                object current = key.GetValue(ValueName);
+                if (current != null && !string.Equals(current as string, Command, StringComparison.OrdinalIgnoreCase))
+                    key.SetValue(ValueName, Command);
             }
         }
     }
 
-    /// <summary>Icono de la bandeja dibujado en tiempo de ejecución.</summary>
+    /// <summary>Colores: acento de Windows, mezclas y color de tinta legible sobre un fondo.</summary>
+    internal static class Theme
+    {
+        public static readonly Color Brand = Color.FromArgb(0, 120, 215);
+
+        public static Color Accent()
+        {
+            try
+            {
+                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\DWM"))
+                {
+                    object v = key == null ? null : key.GetValue("AccentColor");
+                    if (v is int)
+                    {
+                        int c = (int)v;   // formato ABGR
+                        return Color.FromArgb(c & 0xFF, (c >> 8) & 0xFF, (c >> 16) & 0xFF);
+                    }
+                }
+            }
+            catch (Exception) { }
+            return Brand;
+        }
+
+        public static Color Blend(Color a, Color b, float t)
+        {
+            return Color.FromArgb(
+                (int)(a.R + (b.R - a.R) * t),
+                (int)(a.G + (b.G - a.G) * t),
+                (int)(a.B + (b.B - a.B) * t));
+        }
+
+        public static bool IsDark(Color c)
+        {
+            return c.R * 0.299 + c.G * 0.587 + c.B * 0.114 < 150;
+        }
+
+        public static Color InkFor(Color background)
+        {
+            return IsDark(background) ? Color.FromArgb(240, 240, 240) : Color.FromArgb(28, 28, 28);
+        }
+    }
+
+    /// <summary>Dibujo vectorial de la chincheta (se ve nítida a cualquier tamaño y DPI).</summary>
+    internal static class Glyphs
+    {
+        // Chincheta vertical en una caja de 16x16; luego se inclina 45°.
+        static readonly PointF[] PinOutline =
+        {
+            new PointF(5f, 1f), new PointF(11f, 1f), new PointF(11f, 2.6f), new PointF(10f, 2.6f),
+            new PointF(10f, 7f), new PointF(12.6f, 9.6f), new PointF(12.6f, 10.8f), new PointF(3.4f, 10.8f),
+            new PointF(3.4f, 9.6f), new PointF(6f, 7f), new PointF(6f, 2.6f), new PointF(5f, 2.6f)
+        };
+
+        public static void DrawPin(Graphics g, RectangleF box, Color ink, bool filled, float fill = 0.68f)
+        {
+            float side = Math.Min(box.Width, box.Height) * fill;
+            float s = side / 16f;
+            var m = new Matrix();
+            m.Translate(box.X + (box.Width - side) / 2f, box.Y + (box.Height - side) / 2f);
+            m.Scale(s, s);
+            m.RotateAt(45f, new PointF(8f, 8f));
+
+            SmoothingMode old = g.SmoothingMode;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var path = new GraphicsPath())
+            using (var pen = new Pen(ink, Math.Max(1f, 1.35f * s)))
+            {
+                pen.LineJoin = LineJoin.Round;
+                pen.StartCap = LineCap.Round;
+                pen.EndCap = LineCap.Round;
+
+                path.AddPolygon(PinOutline);
+                path.Transform(m);
+                if (filled)
+                {
+                    using (var brush = new SolidBrush(ink)) g.FillPath(brush, path);
+                }
+                g.DrawPath(pen, path);
+
+                var needle = new[] { new PointF(8f, 10.8f), new PointF(8f, 15.2f) };
+                m.TransformPoints(needle);
+                g.DrawLine(pen, needle[0], needle[1]);
+            }
+            m.Dispose();
+            g.SmoothingMode = old;
+        }
+    }
+
+    /// <summary>Icono de la app: chincheta blanca sobre círculo azul.</summary>
     internal static class Icons
     {
         [DllImport("user32.dll")]
         static extern bool DestroyIcon(IntPtr hIcon);
 
+        public static Bitmap Render(int size)
+        {
+            var bmp = new Bitmap(size, size, PixelFormat.Format32bppArgb);
+            using (Graphics g = Graphics.FromImage(bmp))
+            using (var bg = new SolidBrush(Theme.Brand))
+            {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.FillEllipse(bg, 0.5f, 0.5f, size - 1.5f, size - 1.5f);
+                Glyphs.DrawPin(g, new RectangleF(0, 0, size, size), Color.White, true, 0.62f);
+            }
+            return bmp;
+        }
+
         public static Icon CreateTrayIcon()
         {
             int size = Math.Max(16, SystemInformation.SmallIconSize.Width);
-            using (var bmp = new Bitmap(size, size))
+            using (Bitmap bmp = Render(size))
             {
-                using (Graphics g = Graphics.FromImage(bmp))
-                using (var font = new Font("Segoe MDL2 Assets", size * 0.62f, GraphicsUnit.Pixel))
-                using (var sf = new StringFormat())
-                using (var bg = new SolidBrush(Color.FromArgb(0, 120, 215)))
-                {
-                    g.SmoothingMode = SmoothingMode.AntiAlias;
-                    g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-                    g.FillEllipse(bg, 0, 0, size - 1, size - 1);
-                    sf.Alignment = StringAlignment.Center;
-                    sf.LineAlignment = StringAlignment.Center;
-                    g.DrawString("", font, Brushes.White, new RectangleF(0, 1, size, size), sf);
-                }
                 IntPtr hIcon = bmp.GetHicon();
                 Icon icon = (Icon)Icon.FromHandle(hIcon).Clone();
                 DestroyIcon(hIcon);
                 return icon;
+            }
+        }
+
+        /// <summary>Genera un .ico con varias resoluciones (PNG embebidos). Uso: PinTop.exe --export-icon ruta.ico</summary>
+        public static void WriteIco(string path)
+        {
+            int[] sizes = { 16, 20, 24, 32, 48, 64, 256 };
+            var images = new List<byte[]>();
+            foreach (int s in sizes)
+            {
+                using (Bitmap bmp = Render(s))
+                using (var ms = new MemoryStream())
+                {
+                    bmp.Save(ms, ImageFormat.Png);
+                    images.Add(ms.ToArray());
+                }
+            }
+
+            using (var w = new BinaryWriter(File.Create(path)))
+            {
+                w.Write((ushort)0);
+                w.Write((ushort)1);
+                w.Write((ushort)sizes.Length);
+                int offset = 6 + 16 * sizes.Length;
+                for (int i = 0; i < sizes.Length; i++)
+                {
+                    byte dim = (byte)(sizes[i] >= 256 ? 0 : sizes[i]);
+                    w.Write(dim); w.Write(dim); w.Write((byte)0); w.Write((byte)0);
+                    w.Write((ushort)1); w.Write((ushort)32);
+                    w.Write(images[i].Length); w.Write(offset);
+                    offset += images[i].Length;
+                }
+                foreach (byte[] img in images) w.Write(img);
             }
         }
     }

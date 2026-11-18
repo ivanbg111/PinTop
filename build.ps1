@@ -8,11 +8,15 @@ if (-not (Test-Path $csc)) { throw "No se encontró csc.exe ($csc). Hace falta .
 
 New-Item -ItemType Directory -Force -Path bin | Out-Null
 
+$wpf = Join-Path (Split-Path $csc) 'WPF'   # UI Automation vive aquí
+
 & $csc /nologo /target:winexe /optimize+ /warn:4 `
     /out:bin\PinTop.exe `
     /win32icon:assets\pintop.ico `
     /win32manifest:src\app.manifest `
+    "/lib:$wpf" `
     /reference:System.Windows.Forms.dll /reference:System.Drawing.dll `
+    /reference:UIAutomationClient.dll /reference:UIAutomationTypes.dll /reference:WindowsBase.dll `
     src\*.cs
 
 if ($LASTEXITCODE -ne 0) { throw "La compilación falló." }
