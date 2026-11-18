@@ -90,6 +90,25 @@ namespace PinTop
             return p;
         }
 
+        /// <summary>
+        /// Cambia el color protagonista (interruptores, selectores, baldosas...). Cada sección de los
+        /// ajustes tiene el suyo: es la identidad visual propia de PinTop.
+        /// </summary>
+        public void SetAccent(Color color)
+        {
+            Accent = Dark ? Theme.Blend(color, Color.White, 0.12f) : color;
+            AccentHover = Theme.Blend(Accent, Dark ? Color.Black : Color.White, 0.12f);
+            AccentPressed = Theme.Blend(Accent, Dark ? Color.Black : Color.White, 0.24f);
+            AccentText = Theme.InkFor(Accent);
+            Tile = Theme.Blend(Card, Accent, Dark ? 0.22f : 0.14f);
+            TileGlyph = Dark ? Theme.Blend(Accent, Color.White, 0.2f) : Theme.Blend(Accent, Color.Black, 0.08f);
+            NavSelected = Theme.Blend(Window, Accent, Dark ? 0.2f : 0.14f);
+        }
+
+        /// <summary>Colores de marca de PinTop.</summary>
+        public static readonly Color BrandBlue = Rgb(0x3B, 0x82, 0xF6);
+        public static readonly Color BrandViolet = Rgb(0x8B, 0x5C, 0xF6);
+
         static Color Rgb(int r, int g, int b)
         {
             return Color.FromArgb(r, g, b);
@@ -100,7 +119,7 @@ namespace PinTop
     internal static class Ui
     {
         public static float Scale = 1f;
-        public static Font Body, BodyStrong, Caption, Subtitle, Title, IconSmall, Icon, IconLarge;
+        public static Font Body, BodyStrong, Caption, Subtitle, Title, IconSmall, IconNav, Icon, IconLarge;
 
         public static void Init()
         {
@@ -120,6 +139,7 @@ namespace PinTop
             Subtitle = new Font(display, 15f);
             Title = new Font(display, 21f);
             IconSmall = new Font(icons, 7.5f);
+            IconNav = new Font(icons, 10f);
             Icon = new Font(icons, 12f);
             IconLarge = new Font(icons, 15f);
         }
@@ -869,21 +889,23 @@ namespace PinTop
     internal sealed class NavList : ModernControl
     {
         readonly string[] glyphs, labels;
+        readonly Color[] colors;
         int selected, hoverIndex = -1;
         Bitmap logo;
         public event EventHandler SelectedChanged;
 
-        public NavList(string[] glyphs, string[] labels, int selectedIndex)
+        public NavList(string[] glyphs, string[] labels, Color[] colors, int selectedIndex)
         {
             this.glyphs = glyphs;
             this.labels = labels;
+            this.colors = colors;
             selected = selectedIndex;
             Cursor = Cursors.Hand;
             logo = Icons.Render(Ui.S(36));
         }
 
         int Top0 { get { return Ui.S(96); } }
-        int ItemH { get { return Ui.S(40); } }
+        int ItemH { get { return Ui.S(44); } }
 
         public int SelectedIndex { get { return selected; } }
 
@@ -927,15 +949,24 @@ namespace PinTop
             {
                 var r = new Rectangle(Ui.S(10), Top0 + i * ItemH + Ui.S(2), Width - Ui.S(20), ItemH - Ui.S(4));
                 bool isSelected = i == selected;
-                // Sección elegida: píldora teñida con el acento y barrita de color; al pasar, gris suave.
-                if (isSelected) Ui.FillRound(g, r, r.Height / 2f, P.NavSelected);
-                else if (i == hoverIndex) Ui.FillRound(g, r, r.Height / 2f, Theme.Blend(P.Window, P.Hover, 0.8f));
-                if (isSelected)
-                    Ui.FillRound(g, new RectangleF(r.Left + Ui.S(4), r.Top + r.Height / 2f - Ui.S(8), Ui.S(3), Ui.S(16)), Ui.S(1.5f), P.Accent);
-                Ui.Text(g, glyphs[i], Ui.Icon, new Rectangle(r.Left + Ui.S(16), r.Top, Ui.S(24), r.Height),
-                    isSelected ? P.Accent : P.Text, TextFormatFlags.VerticalCenter);
-                Ui.Text(g, labels[i], isSelected ? Ui.BodyStrong : Ui.Body, new Rectangle(r.Left + Ui.S(50), r.Top, r.Width - Ui.S(54), r.Height),
-                    P.Text, TextFormatFlags.VerticalCenter);
+                Color color = colors[i];
+                // Sección elegida: fondo teñido con SU color (redondeo moderado); al pasar, gris suave.
+                if (isSelected) Ui.FillRound(g, r, Ui.S(8), Theme.Blend(P.Window, color, P.Dark ? 0.2f : 0.13f));
+                else if (i == hoverIndex) Ui.FillRound(g, r, Ui.S(8), Theme.Blend(P.Window, P.Hover, 0.8f));
+
+                // Baldosa de color propia de cada sección, con degradado y el icono en blanco.
+                int tile = Ui.S(28);
+                var t = new RectangleF(r.Left + Ui.S(10), r.Top + (r.Height - tile) / 2f, tile, tile);
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                using (GraphicsPath path = Ui.Round(t, Ui.S(8)))
+                using (var brush = new LinearGradientBrush(new PointF(t.Left, t.Top), new PointF(t.Right, t.Bottom),
+                    Theme.Blend(color, Color.White, 0.18f), Theme.Blend(color, Color.Black, 0.12f)))
+                    g.FillPath(brush, path);
+                Ui.Text(g, glyphs[i], Ui.IconNav, Rectangle.Round(t), Color.White,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+
+                Ui.Text(g, labels[i], isSelected ? Ui.BodyStrong : Ui.Body,
+                    new Rectangle(r.Left + Ui.S(50), r.Top, r.Width - Ui.S(54), r.Height), P.Text, TextFormatFlags.VerticalCenter);
             }
         }
 
@@ -978,9 +1009,9 @@ namespace PinTop
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
 
-            Color baseColor = Theme.Accent();
-            Color start = Theme.Blend(baseColor, Color.White, 0.08f);
-            Color end = Theme.Blend(baseColor, Color.Black, 0.45f);
+            // Degradado de marca de PinTop (azul del logo → violeta), igual en cualquier PC.
+            Color start = Palette.BrandBlue;
+            Color end = Theme.Blend(Palette.BrandViolet, Color.Black, 0.15f);
             var r = new RectangleF(0, 0, Width - 1, Height - 1);
             using (GraphicsPath path = Ui.Round(r, Ui.S(14)))
             {

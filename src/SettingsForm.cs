@@ -15,6 +15,19 @@ namespace PinTop
         static readonly string[] NavGlyphs = { "", "", "", "", "", "" };
         static readonly string[] NavLabels = { "General", "Botón", "Atajos de teclado", "Transparencia", "Apps", "Acerca de" };
 
+        /// <summary>Color propio de cada sección (identidad de PinTop, no la de Windows).</summary>
+        static readonly Color[] NavColors =
+        {
+            Palette.BrandBlue,                 // General
+            Color.FromArgb(0xEC, 0x48, 0x99),  // Botón: rosa
+            Palette.BrandViolet,               // Atajos: violeta
+            Color.FromArgb(0x14, 0xB8, 0xA6),  // Transparencia: turquesa
+            Color.FromArgb(0xF5, 0x9E, 0x0B),  // Apps: ámbar
+            Color.FromArgb(0x64, 0x74, 0x8B),  // Acerca de: gris pizarra
+        };
+
+        NavList nav;
+
         static readonly KeyValuePair<HotkeyAction, string>[] HotkeyRows =
         {
             new KeyValuePair<HotkeyAction, string>(HotkeyAction.TogglePin, "Fijar o soltar la ventana activa"),
@@ -86,7 +99,7 @@ namespace PinTop
             host.BackColor = Palette.Current.Window;
             Controls.Add(host);
 
-            var nav = new NavList(NavGlyphs, NavLabels, pageIndex);
+            nav = new NavList(NavGlyphs, NavLabels, NavColors, pageIndex);
             nav.Dock = DockStyle.Left;
             nav.Width = Ui.S(250);
             nav.SelectedChanged += delegate { ShowPage(nav.SelectedIndex); };
@@ -100,6 +113,7 @@ namespace PinTop
         void ShowPage(int index)
         {
             pageIndex = index;
+            Palette.Current.SetAccent(NavColors[index]);   // la página entera toma el color de su sección
             host.SuspendLayout();
             foreach (Control c in new List<Control>(host.Controls.Cast())) c.Dispose();
             host.Controls.Clear();
