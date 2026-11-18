@@ -1180,7 +1180,16 @@ namespace PinTop
                 Changed();
             }));
             Theme.StyleMenu(menu);
-            menu.Closed += delegate { BeginInvoke(new Action(menu.Dispose)); };
+            menu.Closed += delegate
+            {
+                // Liberar el menú después de cerrarse; si la lista ya no existe, liberarlo directamente.
+                try
+                {
+                    if (!IsDisposed && IsHandleCreated) BeginInvoke(new Action(menu.Dispose));
+                    else menu.Dispose();
+                }
+                catch (InvalidOperationException) { }
+            };
             menu.Show(add, new Point(0, add.Height + Ui.S(2)));
         }
 

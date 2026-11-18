@@ -66,6 +66,7 @@ namespace PinTop
         int ticks;
         bool ghostHintShown;
         bool capturingHotkey;   // la ventana de Ajustes está escribiendo un atajo
+        bool exiting;           // la app se está cerrando
         string newVersion;
 
         public TrayApp()
@@ -210,7 +211,10 @@ namespace PinTop
         /// <summary>Lista de ventanas fijadas: clic en una para soltarla.</summary>
         void RebuildPinnedList()
         {
+            var oldItems = new List<ToolStripItem>();
+            foreach (ToolStripItem old in pinnedListItem.DropDownItems) oldItems.Add(old);
             pinnedListItem.DropDownItems.Clear();
+            foreach (ToolStripItem old in oldItems) old.Dispose();
             List<IntPtr> pinned = WindowManager.PinnedWindows();
             pinnedListItem.Text = "Ventanas fijadas (" + pinned.Count + ")";
             pinnedListItem.Enabled = pinned.Count > 0;
@@ -289,6 +293,9 @@ namespace PinTop
             menuKeyProc = OnMenuKey;
             menu.Opened += delegate
             {
+                // Por si acaso quedara algún gancho de una apertura anterior.
+                if (menuHook != IntPtr.Zero) Native.UnhookWindowsHookEx(menuHook);
+                if (menuKeyHook != IntPtr.Zero) Native.UnhookWindowsHookEx(menuKeyHook);
                 IntPtr module = Native.GetModuleHandle(null);
                 menuHook = Native.SetWindowsHookEx(Native.WH_MOUSE_LL, menuMouseProc, module, 0);
                 menuKeyHook = Native.SetWindowsHookEx(Native.WH_KEYBOARD_LL, menuKeyProc, module, 0);
@@ -474,9 +481,11 @@ namespace PinTop
 
         void OnWinEvent(IntPtr hook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint thread, uint time)
         {
-            if (idObject != Native.OBJID_WINDOW || idChild != 0) return;
-            if (eventType == Native.EVENT_OBJECT_DESTROY && (placements.ContainsKey(hwnd) || appNames.ContainsKey(hwnd)))
+            if (idObject != Native.OBJID_WINDOW || idChild != 0 || exiting) return;
+            if (eventType == Native.EVENT_OBJECT_DESTROY)
             {
+                // Ventana cerrada: olvidar TODO lo que sabíamos de ella (si Windows reutiliza el
+                // identificador, la ventana nueva no debe heredar fijado, opacidad ni fantasma).
                 placements.Remove(hwnd);
                 appNames.Remove(hwnd);
                 autoPinChecked.Remove(hwnd);
@@ -511,6 +520,7 @@ namespace PinTop
         /// </summary>
         void Sync()
         {
+            if (exiting) return;               // al salir no se vuelve a fijar ni a pintar nada
             if (buttonMenu.Visible) return;   // no mover nada mientras el menú del botón está abierto
 
             List<IntPtr> appWindows = (settings.AllWindows || settings.AutoPinApps.Count > 0)
@@ -742,6 +752,7 @@ namespace PinTop
             float scale = WindowManager.GetScale(b.Target);
             settings.Offsets[p.App] = (int)Math.Round((frame.Right - left) / scale);
             settings.Save();
+            NotifySettingsForm();
             InvalidatePlacements();   // aplica la nueva posición a todas las ventanas de esa app
         }
 
@@ -751,7 +762,17 @@ namespace PinTop
             if (app == null) return;
             settings.Offsets.Remove(app);
             settings.Save();
+            NotifySettingsForm();
             InvalidatePlacements();
+        }
+
+        /// <summary>
+        /// Si los Ajustes están abiertos, que recarguen los valores: así no "pisan" después un cambio
+        /// hecho desde una chincheta, su menú o la bandeja.
+        /// </summary>
+        void NotifySettingsForm()
+        {
+            if (settingsForm != null && !settingsForm.IsDisposed) settingsForm.Reload(settings);
         }
 
         // ───────────────────────────── Acciones ─────────────────────────────
@@ -794,9 +815,12 @@ namespace PinTop
         void SetGhost(IntPtr hwnd, bool on)
         {
             if (!Native.IsWindow(hwnd)) return;
-            if (on && !WindowManager.IsPinned(hwnd)) WindowManager.TogglePin(hwnd);   // fantasma implica fijada
+            bool pinnedHere = false;
+            if (on && !WindowManager.IsPinned(hwnd)) pinnedHere = WindowManager.TogglePin(hwnd);   // fantasma implica fijada
             if (!WindowManager.SetGhost(hwnd, on))
             {
+                // No se pudo: no dejar la ventana fijada si la fijamos solo para esto.
+                if (pinnedHere && WindowManager.IsPinned(hwnd)) WindowManager.TogglePin(hwnd);
                 Warn("Esta ventana no admite el modo fantasma.");
             }
             else if (on && !ghostHintShown)
@@ -848,10 +872,12 @@ namespace PinTop
             if (settings.AutoPinApps.Remove(app))
             {
                 settings.Save();
+                NotifySettingsForm();
                 return;
             }
             settings.AutoPinApps.Add(app);
             settings.Save();
+            NotifySettingsForm();
             // Fijar ya todas las ventanas abiertas de esa app.
             foreach (IntPtr w in WindowManager.AppWindows())
                 if (AppOf(w) == app && !WindowManager.IsPinned(w)) WindowManager.TogglePin(w);
@@ -864,6 +890,7 @@ namespace PinTop
             if (app == null) return;
             settings.ExcludedApps.Add(app);
             settings.Save();
+            NotifySettingsForm();
             Sync();
             tray.ShowBalloonTip(4000, "PinTop", "Ya no se mostrará el botón en " + app
                 + ". Puedes volver a activarlo en Ajustes.", ToolTipIcon.Info);
@@ -946,6 +973,7 @@ namespace PinTop
         {
             settings.ShowButton = value;
             settings.Save();
+            NotifySettingsForm();
             Sync();
         }
 
@@ -982,16 +1010,25 @@ namespace PinTop
             // Los atajos solo se pausan mientras se escribe una combinación (para poder capturarla).
             settingsForm.CapturingHotkeyChanged += capturing =>
             {
+                if (exiting || capturing == capturingHotkey) return;
                 capturingHotkey = capturing;
-                if (capturing) hotkeys.UnregisterAll();
-                else RegisterHotkeys();
+                if (capturing)
+                {
+                    hotkeys.UnregisterAll();
+                }
+                else
+                {
+                    List<string> failed = RegisterHotkeys();
+                    if (failed.Count > 0) WarnHotkeys(failed);
+                }
             };
             Sync();
             settingsForm.FormClosed += delegate
             {
-                settingsForm.Dispose();
+                if (settingsForm != null) settingsForm.Dispose();
                 settingsForm = null;
                 capturingHotkey = false;
+                if (exiting) return;   // saliendo: no volver a registrar atajos ni a fijar nada
                 List<string> failed = RegisterHotkeys();
                 if (failed.Count > 0) WarnHotkeys(failed);
                 Sync();
@@ -1004,10 +1041,10 @@ namespace PinTop
         void ApplySettings(Settings changed)
         {
             bool updatesWereOff = !settings.CheckUpdates;
-            bool layoutChanged = changed.ButtonSize != settings.ButtonSize || changed.Offsets.Count != settings.Offsets.Count;
-            // Las ventanas ya abiertas cuentan como "vistas": una regla nueva de "fijar siempre"
-            // solo afecta a las que se abran después.
-            foreach (IntPtr hwnd in WindowManager.AppWindows()) autoPinChecked.Add(hwnd);
+            bool layoutChanged = changed.ButtonSize != settings.ButtonSize || !SameOffsets(changed.Offsets, settings.Offsets);
+            // Las ventanas ya abiertas (también minimizadas, ocultas o en otro escritorio) cuentan
+            // como "vistas": una regla nueva de "fijar siempre" solo afecta a las que se abran después.
+            foreach (IntPtr hwnd in WindowManager.AllTopLevelWindows()) autoPinChecked.Add(hwnd);
             settings.CopyFrom(changed);
             settings.Save();
             Theme.Mode = settings.ThemeMode;
@@ -1024,6 +1061,17 @@ namespace PinTop
             else Sync();
             if (updatesWereOff && settings.CheckUpdates && newVersion == null)
                 Updater.CheckAsync(v => Post(() => OnNewVersion(v)));
+        }
+
+        static bool SameOffsets(Dictionary<string, int> a, Dictionary<string, int> b)
+        {
+            if (a.Count != b.Count) return false;
+            foreach (KeyValuePair<string, int> pair in a)
+            {
+                int other;
+                if (!b.TryGetValue(pair.Key, out other) || other != pair.Value) return false;
+            }
+            return true;
         }
 
         /// <summary>Nombres de las apps con ventanas abiertas (para elegirlas en Ajustes).</summary>
@@ -1056,6 +1104,14 @@ namespace PinTop
 
         protected override void ExitThreadCore()
         {
+            // Primero se marca la salida y se cierran los Ajustes: así nada (ni el cierre de esa
+            // ventana ni un temporizador) puede volver a fijar o pintar después de restaurar.
+            exiting = true;
+            if (settingsForm != null)
+            {
+                try { settingsForm.Close(); } catch (Exception) { }
+                settingsForm = null;
+            }
             syncTimer.Stop();
             fadeTimer.Stop();
             updateTimer.Stop();
@@ -1067,7 +1123,6 @@ namespace PinTop
             hotkeys.Dispose();
             probe.Dispose();
             WindowManager.RestoreAll();   // nada se queda fijado, transparente, fantasma ni con borde al salir
-            if (settingsForm != null) settingsForm.Close();
             tray.Visible = false;
             tray.Dispose();
             ReleaseAllButtons();

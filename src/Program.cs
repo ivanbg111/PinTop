@@ -51,6 +51,22 @@ namespace PinTop
 
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
+
+                // Red de seguridad: un error inesperado nunca debe dejar ventanas fijadas,
+                // transparentes o en modo fantasma.
+                Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+                Application.ThreadException += (s, e) =>
+                {
+                    // Error en la interfaz: se registra y la app sigue funcionando.
+                    Debug.Log("error: " + e.Exception);
+                };
+                AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+                {
+                    // Error en otro hilo: la app se va a cerrar; antes, dejar las ventanas como estaban.
+                    Debug.Log("error fatal: " + e.ExceptionObject);
+                    try { WindowManager.RestoreAll(); } catch (Exception) { }
+                };
+
                 Ui.Init();   // escala por DPI y fuentes de la interfaz
                 Application.Run(new TrayApp());
             }

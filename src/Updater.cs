@@ -50,7 +50,11 @@ namespace PinTop
                 catch (Exception ex)
                 {
                     Debug.Log("update check: " + ex.Message);   // sin conexión, límite de GitHub...
-                    if (onError != null) onError();
+                    try
+                    {
+                        if (onError != null) onError();
+                    }
+                    catch (Exception) { }   // nunca dejar escapar un error desde este hilo
                 }
             });
         }

@@ -19,7 +19,15 @@ namespace PinTop
         static readonly HashSet<IntPtr> pinnedByUs = new HashSet<IntPtr>();
 
         // Ventanas a las que hemos cambiado la opacidad -> ¿eran ya "layered" antes?
-        static readonly Dictionary<IntPtr, bool> opacityTouched = new Dictionary<IntPtr, bool>();
+        /// <summary>Cómo era la transparencia de una ventana antes de que PinTop la tocara.</summary>
+        sealed class OriginalLayer
+        {
+            public bool Layered;
+            public uint Key, Flags;
+            public byte Alpha;
+        }
+
+        static readonly Dictionary<IntPtr, OriginalLayer> opacityTouched = new Dictionary<IntPtr, OriginalLayer>();
 
         // Ventanas del sistema en las que nunca se muestra el botón.
         static readonly HashSet<string> IgnoredClasses = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -205,26 +213,45 @@ namespace PinTop
             int ex = Native.GetWindowLong(hwnd, Native.GWL_EXSTYLE);
             bool layered = (ex & Native.WS_EX_LAYERED) != 0;
 
-            if (!opacityTouched.ContainsKey(hwnd))
+            OriginalLayer original;
+            if (!opacityTouched.TryGetValue(hwnd, out original))
             {
                 // Una ventana que ya era "layered" pero sin atributos usa transparencia por píxel:
                 // tocarla la estropearía, así que no lo hacemos.
-                uint k, f;
-                byte a;
-                if (layered && !Native.GetLayeredWindowAttributes(hwnd, out k, out a, out f)) return false;
-                opacityTouched[hwnd] = layered;
+                original = new OriginalLayer();
+                original.Layered = layered;
+                if (layered && !Native.GetLayeredWindowAttributes(hwnd, out original.Key, out original.Alpha, out original.Flags))
+                    return false;
+                opacityTouched[hwnd] = original;
             }
 
-            if (alpha == 255 && !opacityTouched[hwnd] && !ghosts.Contains(hwnd))
+            if (alpha == 255 && !ghosts.Contains(hwnd))
             {
-                // Volvemos a dejar la ventana exactamente como estaba.
-                Native.SetWindowLong(hwnd, Native.GWL_EXSTYLE, ex & ~Native.WS_EX_LAYERED);
+                // Volvemos a dejar la ventana exactamente como estaba (incluida su transparencia propia).
+                RestoreLayer(hwnd, original);
                 opacityTouched.Remove(hwnd);
                 return true;
             }
 
             if (!layered) Native.SetWindowLong(hwnd, Native.GWL_EXSTYLE, ex | Native.WS_EX_LAYERED);
             return Native.SetLayeredWindowAttributes(hwnd, 0, alpha, Native.LWA_ALPHA);
+        }
+
+        static void RestoreLayer(IntPtr hwnd, OriginalLayer original)
+        {
+            int ex = Native.GetWindowLong(hwnd, Native.GWL_EXSTYLE);
+            if (!original.Layered)
+                Native.SetWindowLong(hwnd, Native.GWL_EXSTYLE, ex & ~Native.WS_EX_LAYERED);
+            else
+                Native.SetLayeredWindowAttributes(hwnd, original.Key, original.Alpha, original.Flags);
+        }
+
+        /// <summary>Todas las ventanas de primer nivel (visibles o no, minimizadas, en otros escritorios...).</summary>
+        public static List<IntPtr> AllTopLevelWindows()
+        {
+            var all = new List<IntPtr>();
+            Native.EnumWindows((hwnd, l) => { all.Add(hwnd); return true; }, IntPtr.Zero);
+            return all;
         }
 
         // ─── Opacidad elegida por el usuario (la atenuación automática no la cambia) ───
@@ -363,9 +390,9 @@ namespace PinTop
             foreach (IntPtr hwnd in GhostWindows()) SetGhost(hwnd, false);
             foreach (IntPtr hwnd in new List<IntPtr>(bordered)) ResetBorder(hwnd);
             UnpinAll();
-            foreach (IntPtr hwnd in new List<IntPtr>(opacityTouched.Keys))
+            foreach (KeyValuePair<IntPtr, OriginalLayer> pair in new List<KeyValuePair<IntPtr, OriginalLayer>>(opacityTouched))
             {
-                if (Native.IsWindow(hwnd)) SetOpacity(hwnd, 255);
+                if (Native.IsWindow(pair.Key)) RestoreLayer(pair.Key, pair.Value);
             }
             opacityTouched.Clear();
             userOpacity.Clear();

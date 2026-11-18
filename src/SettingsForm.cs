@@ -123,6 +123,8 @@ namespace PinTop
 
         void ShowPage(int index)
         {
+            // Si se estaba escribiendo un atajo, la casilla va a desaparecer: reactivar los atajos.
+            RaiseCapturing(false);
             pageIndex = index;
             Palette.Current.SetAccent(NavColors[index]);   // la página entera toma el color de su sección
             host.SuspendLayout();
@@ -391,16 +393,18 @@ namespace PinTop
                 status.Set("Comprobando…", TextLabel.Kind.Sub);
                 status.Fit(0);
                 check.Enabled = false;
+                // La respuesta llega desde otro hilo y puede que la ventana (o la página) ya se haya
+                // cerrado: SafePost lo comprueba para no provocar un error.
                 Updater.CheckAsync(
-                    v => BeginInvoke(new Action(() =>
+                    v => SafePost(status, () =>
                     {
                         status.Set("Hay una versión nueva: " + v, TextLabel.Kind.Success);
                         status.Fit(0);
                         check.Enabled = true;
                         if (NewVersionFound != null) NewVersionFound(v);
-                    })),
-                    () => BeginInvoke(new Action(() => { status.Set("Tienes la última versión", TextLabel.Kind.Success); status.Fit(0); check.Enabled = true; })),
-                    () => BeginInvoke(new Action(() => { status.Set("No se pudo comprobar (¿sin conexión?)", TextLabel.Kind.Danger); status.Fit(0); check.Enabled = true; })));
+                    }),
+                    () => SafePost(status, () => { status.Set("Tienes la última versión", TextLabel.Kind.Success); status.Fit(0); check.Enabled = true; }),
+                    () => SafePost(status, () => { status.Set("No se pudo comprobar (¿sin conexión?)", TextLabel.Kind.Danger); status.Fit(0); check.Enabled = true; }));
             };
 
             var about = new Card()
@@ -416,6 +420,33 @@ namespace PinTop
         static void OpenUrl(string url)
         {
             try { Process.Start(url); } catch (Exception) { }
+        }
+
+        /// <summary>Ejecuta en el hilo de la interfaz solo si el control sigue vivo; nunca lanza.</summary>
+        static void SafePost(Control target, Action action)
+        {
+            try
+            {
+                if (target == null || target.IsDisposed || !target.IsHandleCreated) return;
+                target.BeginInvoke(new Action(() =>
+                {
+                    if (!target.IsDisposed) action();
+                }));
+            }
+            catch (InvalidOperationException) { }   // incluye ObjectDisposedException
+        }
+
+        /// <summary>
+        /// Recarga los valores desde los ajustes reales (si se cambiaron fuera de esta ventana,
+        /// p. ej. arrastrando una chincheta o desde su menú) para no pisarlos después.
+        /// </summary>
+        public void Reload(Settings current)
+        {
+            if (IsDisposed) return;
+            working.CopyFrom(current);
+            shownHotkeys.Clear();
+            foreach (KeyValuePair<HotkeyAction, Hotkey> pair in working.Hotkeys) shownHotkeys[pair.Key] = pair.Value;
+            if (!(ActiveControl is KeycapBox)) ShowPage(pageIndex);
         }
     }
 
