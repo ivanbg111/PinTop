@@ -404,6 +404,18 @@ namespace PinTop
             return bmp;
         }
 
+        static readonly int[] IcoSizes = { 16, 20, 24, 32, 40, 48, 64, 256 };
+
+        /// <summary>
+        /// Icono de ventana con todos los tamaños (16 a 256 px): Windows elige el exacto para la
+        /// barra de título, la barra de tareas o Alt+Tab, así nunca se ve borroso al escalarlo.
+        /// </summary>
+        public static Icon CreateWindowIcon()
+        {
+            var ms = new MemoryStream(BuildIco(IcoSizes));
+            return new Icon(ms);
+        }
+
         public static Icon CreateTrayIcon()
         {
             int size = Math.Max(16, SystemInformation.SmallIconSize.Width);
@@ -419,7 +431,12 @@ namespace PinTop
         /// <summary>Genera un .ico con varias resoluciones (PNG embebidos). Uso: PinTop.exe --export-icon ruta.ico</summary>
         public static void WriteIco(string path)
         {
-            int[] sizes = { 16, 20, 24, 32, 48, 64, 256 };
+            File.WriteAllBytes(path, BuildIco(IcoSizes));
+        }
+
+        /// <summary>Formato .ico con una imagen PNG por tamaño.</summary>
+        static byte[] BuildIco(int[] sizes)
+        {
             var images = new List<byte[]>();
             foreach (int s in sizes)
             {
@@ -431,7 +448,8 @@ namespace PinTop
                 }
             }
 
-            using (var w = new BinaryWriter(File.Create(path)))
+            using (var output = new MemoryStream())
+            using (var w = new BinaryWriter(output))
             {
                 w.Write((ushort)0);
                 w.Write((ushort)1);
@@ -446,6 +464,8 @@ namespace PinTop
                     offset += images[i].Length;
                 }
                 foreach (byte[] img in images) w.Write(img);
+                w.Flush();
+                return output.ToArray();
             }
         }
     }

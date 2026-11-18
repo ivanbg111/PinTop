@@ -43,7 +43,7 @@ namespace PinTop
             foreach (KeyValuePair<HotkeyAction, Hotkey> pair in working.Hotkeys) shownHotkeys[pair.Key] = pair.Value;
 
             Text = "Ajustes de PinTop";
-            Icon = Icons.CreateTrayIcon();
+            Icon = Icons.CreateWindowIcon();   // todos los tamaños: nítido en la barra de tareas
             Font = Ui.Body;
             StartPosition = FormStartPosition.CenterScreen;
             AutoScaleMode = AutoScaleMode.None;
