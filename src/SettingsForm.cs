@@ -49,6 +49,14 @@ namespace PinTop
         /// <summary>Se lanza si "Buscar actualizaciones" encuentra una versión nueva.</summary>
         public event Action<string> NewVersionFound;
 
+        /// <summary>true mientras una casilla de atajo está escribiendo una combinación.</summary>
+        public event Action<bool> CapturingHotkeyChanged;
+
+        void RaiseCapturing(bool capturing)
+        {
+            if (CapturingHotkeyChanged != null) CapturingHotkeyChanged(capturing);
+        }
+
         public SettingsForm(Settings current, List<string> runningApps, Action<Settings> apply, Func<int> pinnedCount)
         {
             working = current.Clone();
@@ -65,6 +73,9 @@ namespace PinTop
             ClientSize = new Size(Ui.S(940), Ui.S(640));
             MinimumSize = new Size(Ui.S(760), Ui.S(520));
             KeyPreview = true;
+            // Por encima de las ventanas fijadas (que son "siempre visibles"): si no, te las
+            // podrían tapar mientras las configuras.
+            TopMost = true;
             BuildUi();
         }
 
@@ -257,6 +268,9 @@ namespace PinTop
                 strip.Controls.Add(clear);
 
                 box.ValueChanged += delegate { OnHotkeyEdited(action, box.Value, boxes, statuses); };
+                // Mientras se escribe la combinación, PinTop suelta sus atajos para poder capturarlos.
+                box.GotFocus += delegate { RaiseCapturing(true); };
+                box.LostFocus += delegate { RaiseCapturing(false); };
                 clear.Click += delegate { box.Value = Hotkey.None; OnHotkeyEdited(action, Hotkey.None, boxes, statuses); };
 
                 // El estado ("✓ Disponible", "Repetido"...) se muestra debajo del nombre.
@@ -297,8 +311,12 @@ namespace PinTop
                     bool duplicate = false;
                     foreach (KeyValuePair<HotkeyAction, KeycapBox> other in boxes)
                         if (other.Key != pair.Key && other.Value.Value.SameAs(hk)) duplicate = true;
+                    // Una combinación que ya es nuestra (registrada por PinTop) no cuenta como "ocupada".
+                    bool ours = false;
+                    foreach (Hotkey registered in working.Hotkeys.Values)
+                        if (registered.SameAs(hk)) ours = true;
                     if (duplicate) { status.SetDescription("Repetido: elige otra combinación", p.Danger); valid = false; }
-                    else if (!HotkeyWindow.IsAvailable(hk)) { status.SetDescription("Ya la usa otra app: elige otra", p.Danger); valid = false; }
+                    else if (!ours && !HotkeyWindow.IsAvailable(hk)) { status.SetDescription("Ya la usa otra app: elige otra", p.Danger); valid = false; }
                     else status.SetDescription("✓ Disponible", p.Success);
                 }
                 Hotkey saved;
@@ -351,7 +369,8 @@ namespace PinTop
         {
             var page = new Page("Apps");
             Func<List<string>> apps = () => runningApps;
-            page.Section("Fijar siempre").Note("Sus ventanas se fijan solas al abrirse, también después de reiniciar.");
+            page.Section("Fijar siempre").Note("Las ventanas que abras de estas apps se fijan solas (también al reiniciar). "
+                + "Las que ya están abiertas no se tocan: para fijarlas, usa su chincheta.");
             page.Card(new Card().Add(new ChipList(working.AutoPinApps, apps, Changed)));
             page.Section("No mostrar el botón en").Note("En estas apps nunca aparece la chincheta (por ejemplo juegos o apps donde estorba).");
             page.Card(new Card().Add(new ChipList(working.ExcludedApps, apps, Changed)));

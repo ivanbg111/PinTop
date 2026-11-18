@@ -65,6 +65,7 @@ namespace PinTop
         Color accent = Theme.Accent();
         int ticks;
         bool ghostHintShown;
+        bool capturingHotkey;   // la ventana de Ajustes está escribiendo un atajo
         string newVersion;
 
         public TrayApp()
@@ -420,7 +421,11 @@ namespace PinTop
 
         bool CoversButton(IntPtr window, Rectangle buttonBounds)
         {
-            if (buttonHandles.Contains(window) || !Native.IsWindowVisible(window) || WindowManager.IsOwnWindow(window))
+            if (buttonHandles.Contains(window) || !Native.IsWindowVisible(window)) return false;
+            // De nuestras ventanas solo tapan las que tienen barra de título (Ajustes y sus diálogos);
+            // los menús y tooltips no.
+            if (WindowManager.IsOwnWindow(window)
+                && (Native.GetWindowLong(window, Native.GWL_STYLE) & Native.WS_CAPTION) != Native.WS_CAPTION)
                 return false;
             if ((Native.GetWindowLong(window, Native.GWL_EXSTYLE) & Native.WS_EX_TRANSPARENT) != 0) return false;
             if (WindowManager.IsCloaked(window)) return false;
@@ -514,7 +519,9 @@ namespace PinTop
             List<IntPtr> pinned = WindowManager.PinnedWindows();
             WindowManager.SyncBorders(pinned, settings.PinnedBorder, accent);
 
-            if (!settings.ShowButton || settingsForm != null)
+            // Los botones siguen visibles aunque los Ajustes estén abiertos: así nunca queda una
+            // ventana fijada sin forma de soltarla.
+            if (!settings.ShowButton)
             {
                 CancelPending();
                 ReleaseAllButtons();
@@ -529,8 +536,10 @@ namespace PinTop
             if (settings.AllWindows)
                 foreach (IntPtr hwnd in appWindows)
                     if (!wanted.Contains(hwnd)) wanted.Add(hwnd);
+            // Las apps excluidas no llevan botón... salvo sus ventanas fijadas, que siempre lo
+            // necesitan para poder soltarlas.
             if (settings.ExcludedApps.Count > 0)
-                wanted.RemoveAll(hwnd => settings.ExcludedApps.Contains(AppOf(hwnd) ?? ""));
+                wanted.RemoveAll(hwnd => !WindowManager.IsPinned(hwnd) && settings.ExcludedApps.Contains(AppOf(hwnd) ?? ""));
 
             IntPtr needs = IntPtr.Zero;
             Size needsSize = Size.Empty;
@@ -968,17 +977,24 @@ namespace PinTop
                 settingsForm.Activate();
                 return;
             }
-            hotkeys.UnregisterAll();   // para poder capturar las combinaciones actuales en la ventana
             settingsForm = new SettingsForm(settings, RunningApps(), ApplySettings, () => WindowManager.PinnedWindows().Count);
             settingsForm.NewVersionFound += OnNewVersion;
+            // Los atajos solo se pausan mientras se escribe una combinación (para poder capturarla).
+            settingsForm.CapturingHotkeyChanged += capturing =>
+            {
+                capturingHotkey = capturing;
+                if (capturing) hotkeys.UnregisterAll();
+                else RegisterHotkeys();
+            };
             Sync();
             settingsForm.FormClosed += delegate
             {
                 settingsForm.Dispose();
                 settingsForm = null;
+                capturingHotkey = false;
                 List<string> failed = RegisterHotkeys();
                 if (failed.Count > 0) WarnHotkeys(failed);
-                InvalidatePlacements();
+                Sync();
             };
             settingsForm.Show();
             settingsForm.Activate();
@@ -988,11 +1004,24 @@ namespace PinTop
         void ApplySettings(Settings changed)
         {
             bool updatesWereOff = !settings.CheckUpdates;
+            bool layoutChanged = changed.ButtonSize != settings.ButtonSize || changed.Offsets.Count != settings.Offsets.Count;
+            // Las ventanas ya abiertas cuentan como "vistas": una regla nueva de "fijar siempre"
+            // solo afecta a las que se abran después.
+            foreach (IntPtr hwnd in WindowManager.AppWindows()) autoPinChecked.Add(hwnd);
             settings.CopyFrom(changed);
             settings.Save();
             Theme.Mode = settings.ThemeMode;
-            autoPinChecked.Clear();   // aplicar "fijar siempre" a lo que ya está abierto
+            // "Fijar siempre" añadido desde Ajustes se aplica a las ventanas que se abran a partir
+            // de ahora (no a las ya abiertas, que aparecerían fijadas de golpe). Por eso NO se
+            // vacía autoPinChecked aquí.
             UpdateFadeTimer();
+            if (!capturingHotkey)
+            {
+                List<string> failed = RegisterHotkeys();
+                if (failed.Count > 0) WarnHotkeys(failed);
+            }
+            if (layoutChanged) InvalidatePlacements();   // tamaño o posiciones: al momento
+            else Sync();
             if (updatesWereOff && settings.CheckUpdates && newVersion == null)
                 Updater.CheckAsync(v => Post(() => OnNewVersion(v)));
         }

@@ -925,9 +925,12 @@ namespace PinTop
 
         protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hoverIndex = -1; Invalidate(); }
 
-        protected override void OnMouseClick(MouseEventArgs e)
+        // Se elige al pulsar (no al soltar): así responde al primer clic aunque la ventana
+        // no estuviera activa.
+        protected override void OnMouseDown(MouseEventArgs e)
         {
-            base.OnMouseClick(e);
+            base.OnMouseDown(e);
+            if (e.Button != MouseButtons.Left) return;
             int i = IndexAt(e.Location);
             if (i < 0 || i == selected) return;
             selected = i;
