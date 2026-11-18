@@ -97,7 +97,61 @@ namespace PinTop
         }
     }
 
-    /// <summary>Ventana de ajustes.</summary>
+    /// <summary>Lista editable de apps (nombre del programa) con un desplegable de las apps abiertas.</summary>
+    internal sealed class AppListEditor : TableLayoutPanel
+    {
+        readonly HashSet<string> target;
+        readonly ListBox list = new ListBox();
+        readonly ComboBox picker = new ComboBox();
+
+        public AppListEditor(HashSet<string> target, List<string> runningApps)
+        {
+            this.target = target;
+            AutoSize = true;
+            ColumnCount = 3;
+            Dock = DockStyle.Fill;
+
+            list.Height = 72;
+            list.Width = 340;
+            list.Sorted = true;
+            foreach (string app in target) list.Items.Add(app);
+            Controls.Add(list);
+            SetColumnSpan(list, 3);
+
+            picker.Width = 200;
+            picker.DropDownStyle = ComboBoxStyle.DropDown;   // se puede escribir un nombre a mano
+            foreach (string app in runningApps) picker.Items.Add(app);
+            Controls.Add(picker);
+
+            var add = new Button();
+            add.Text = "Añadir";
+            add.AutoSize = true;
+            add.Click += delegate
+            {
+                string app = picker.Text.Trim();
+                if (app.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) app = app.Substring(0, app.Length - 4);
+                if (app.Length == 0 || target.Contains(app)) return;
+                target.Add(app);
+                list.Items.Add(app);
+                picker.Text = "";
+            };
+            Controls.Add(add);
+
+            var remove = new Button();
+            remove.Text = "Quitar";
+            remove.AutoSize = true;
+            remove.Click += delegate
+            {
+                string app = list.SelectedItem as string;
+                if (app == null) return;
+                target.Remove(app);
+                list.Items.Remove(app);
+            };
+            Controls.Add(remove);
+        }
+    }
+
+    /// <summary>Ventana de ajustes (sigue el modo claro/oscuro de Windows).</summary>
     internal sealed class SettingsForm : Form
     {
         static readonly KeyValuePair<HotkeyAction, string>[] Rows =
@@ -105,10 +159,16 @@ namespace PinTop
             new KeyValuePair<HotkeyAction, string>(HotkeyAction.TogglePin, "Fijar / soltar la ventana activa"),
             new KeyValuePair<HotkeyAction, string>(HotkeyAction.OpacityDown, "Más transparente"),
             new KeyValuePair<HotkeyAction, string>(HotkeyAction.OpacityUp, "Menos transparente"),
+            new KeyValuePair<HotkeyAction, string>(HotkeyAction.Ghost, "Modo fantasma (activar / quitar)"),
             new KeyValuePair<HotkeyAction, string>(HotkeyAction.ToggleButton, "Mostrar / ocultar el botón"),
         };
 
+        static readonly Color ErrorLight = Color.Firebrick, ErrorDark = Color.FromArgb(255, 120, 120);
+        static readonly Color OkLight = Color.SeaGreen, OkDark = Color.FromArgb(120, 210, 150);
+
         readonly Settings working;
+        readonly List<string> runningApps;
+        readonly bool dark = Theme.AppsUseDark();
         readonly Dictionary<HotkeyAction, HotkeyBox> boxes = new Dictionary<HotkeyAction, HotkeyBox>();
         readonly Dictionary<HotkeyAction, Label> states = new Dictionary<HotkeyAction, Label>();
         readonly CheckBox showButton = new CheckBox();
@@ -120,9 +180,10 @@ namespace PinTop
 
         public Settings Result { get { return working; } }
 
-        public SettingsForm(Settings current)
+        public SettingsForm(Settings current, List<string> runningApps)
         {
             working = current.Clone();
+            this.runningApps = runningApps;
 
             Text = "Ajustes de PinTop " + Program.Version;
             Icon = Icons.CreateTrayIcon();
@@ -135,20 +196,46 @@ namespace PinTop
             AutoSizeMode = AutoSizeMode.GrowAndShrink;
             Padding = new Padding(12);
 
+            // Dos columnas: atajos y botón a la izquierda; resto a la derecha.
             var root = new TableLayoutPanel();
             root.AutoSize = true;
-            root.ColumnCount = 1;
+            root.ColumnCount = 2;
             root.Dock = DockStyle.Fill;
             Controls.Add(root);
 
-            root.Controls.Add(BuildHotkeys());
-            root.Controls.Add(BuildButtonGroup());
-            root.Controls.Add(BuildGeneralGroup());
-            root.Controls.Add(BuildFooter());
+            var left = NewColumn();
+            left.Controls.Add(BuildHotkeys());
+            left.Controls.Add(BuildButtonGroup());
+            var right = NewColumn();
+            right.Controls.Add(BuildFadeGroup());
+            right.Controls.Add(BuildAppsGroup());
+            right.Controls.Add(BuildGeneralGroup());
+            root.Controls.Add(left);
+            root.Controls.Add(right);
+            Control footer = BuildFooter();
+            root.Controls.Add(footer);
+            root.SetColumnSpan(footer, 2);
 
             ValidateHotkeys();
+            if (dark) ApplyDark(this);
             // Que no aparezca la primera casilla de atajo seleccionada al abrir.
             Shown += delegate { ActiveControl = showButton; };
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            if (dark) Theme.UseDarkTitleBar(Handle, true);
+        }
+
+        static TableLayoutPanel NewColumn()
+        {
+            var col = new TableLayoutPanel();
+            col.AutoSize = true;
+            col.ColumnCount = 1;
+            col.Dock = DockStyle.Fill;
+            col.Margin = new Padding(0, 0, 10, 0);
+            return col;
         }
 
         Control BuildHotkeys()
@@ -168,7 +255,7 @@ namespace PinTop
                 label.Anchor = AnchorStyles.Left;
 
                 var box = new HotkeyBox();
-                box.Width = 200;
+                box.Width = 170;
                 box.Value = working.Hotkeys.ContainsKey(action) ? working.Hotkeys[action] : Hotkey.None;
                 box.ValueChanged += delegate
                 {
@@ -185,7 +272,7 @@ namespace PinTop
                 var state = new Label();
                 state.AutoSize = true;
                 state.Anchor = AnchorStyles.Left;
-                state.MinimumSize = new Size(150, 0);
+                state.MinimumSize = new Size(120, 0);
                 states[action] = state;
 
                 table.Controls.Add(label);
@@ -194,13 +281,8 @@ namespace PinTop
                 table.Controls.Add(state);
             }
 
-            var hint = new Label();
-            hint.AutoSize = true;
-            hint.MaximumSize = new Size(560, 0);
-            hint.ForeColor = SystemColors.GrayText;
-            hint.Margin = new Padding(3, 8, 3, 0);
-            hint.Text = "Haz clic en una casilla y pulsa la combinación. Supr o Retroceso la borra.\n"
-                + "Evita Ctrl + Alt con teclas que usas con AltGr (@, #, €, [ ]...): dejarías de poder escribirlas.";
+            Label hint = Hint("Haz clic en una casilla y pulsa la combinación. Supr o Retroceso la borra.\n"
+                + "Evita Ctrl + Alt con teclas que usas con AltGr (@, #, €, [ ]...).");
             table.Controls.Add(hint);
             table.SetColumnSpan(hint, 4);
 
@@ -231,10 +313,17 @@ namespace PinTop
             flow.Controls.Add(allWindows);
             flow.SetFlowBreak(allWindows, true);
 
+            var border = new CheckBox();
+            border.Text = "Borde de color en las ventanas fijadas (Windows 11)";
+            border.AutoSize = true;
+            border.Checked = working.PinnedBorder;
+            border.CheckedChanged += delegate { working.PinnedBorder = border.Checked; };
+            flow.Controls.Add(border);
+            flow.SetFlowBreak(border, true);
+
             var sizeLabel = new Label();
             sizeLabel.Text = "Tamaño:";
             sizeLabel.AutoSize = true;
-            sizeLabel.Anchor = AnchorStyles.Left;
             sizeLabel.Margin = new Padding(3, 7, 3, 3);
             flow.Controls.Add(sizeLabel);
 
@@ -253,6 +342,10 @@ namespace PinTop
             };
             UpdateResetText();
             flow.Controls.Add(resetOffsets);
+            flow.SetFlowBreak(resetOffsets, true);
+
+            flow.Controls.Add(Hint("Rueda del ratón sobre el botón: cambia la transparencia.\n"
+                + "Arrastra el botón para moverlo; la posición se recuerda en cada app."));
 
             group.Controls.Add(flow);
             return group;
@@ -260,8 +353,72 @@ namespace PinTop
 
         void UpdateResetText()
         {
-            resetOffsets.Text = "Restablecer posiciones movidas a mano (" + working.Offsets.Count + " apps)";
+            resetOffsets.Text = "Restablecer botones movidos a mano (" + working.Offsets.Count + " apps)";
             resetOffsets.Enabled = working.Offsets.Count > 0;
+        }
+
+        Control BuildFadeGroup()
+        {
+            GroupBox group = NewGroup("Atenuar ventanas fijadas");
+            var flow = NewFlow();
+
+            var enable = new CheckBox();
+            enable.Text = "Atenuar las ventanas fijadas cuando no las uso";
+            enable.AutoSize = true;
+            enable.Checked = working.FadeEnabled;
+            flow.Controls.Add(enable);
+            flow.SetFlowBreak(enable, true);
+
+            var levelLabel = new Label();
+            levelLabel.Text = "Opacidad al atenuar:";
+            levelLabel.AutoSize = true;
+            levelLabel.Margin = new Padding(20, 7, 3, 3);
+            flow.Controls.Add(levelLabel);
+
+            var level = new ComboBox();
+            level.DropDownStyle = ComboBoxStyle.DropDownList;
+            level.Width = 80;
+            int[] levels = { 20, 30, 40, 50, 60, 70 };
+            int selected = 2;
+            for (int i = 0; i < levels.Length; i++)
+            {
+                level.Items.Add(levels[i] + " %");
+                if (levels[i] == working.FadePercent) selected = i;
+            }
+            level.SelectedIndex = selected;
+            level.SelectedIndexChanged += delegate { working.FadePercent = levels[level.SelectedIndex]; };
+            flow.Controls.Add(level);
+            flow.SetFlowBreak(level, true);
+
+            level.Enabled = levelLabel.Enabled = enable.Checked;
+            enable.CheckedChanged += delegate
+            {
+                working.FadeEnabled = enable.Checked;
+                level.Enabled = levelLabel.Enabled = enable.Checked;
+            };
+
+            flow.Controls.Add(Hint("Se vuelven transparentes mientras el ratón no está encima\n"
+                + "y recuperan su opacidad al pasar el ratón o activarlas."));
+            group.Controls.Add(flow);
+            return group;
+        }
+
+        Control BuildAppsGroup()
+        {
+            GroupBox group = NewGroup("Apps");
+            var table = new TableLayoutPanel();
+            table.AutoSize = true;
+            table.ColumnCount = 1;
+            table.Dock = DockStyle.Fill;
+
+            table.Controls.Add(Title("Fijar siempre (se fijan solas al abrirse):"));
+            table.Controls.Add(new AppListEditor(working.AutoPinApps, runningApps));
+            table.Controls.Add(Title("No mostrar el botón en:"));
+            table.Controls.Add(new AppListEditor(working.ExcludedApps, runningApps));
+            table.Controls.Add(Hint("Elige una app abierta en el desplegable o escribe su nombre."));
+
+            group.Controls.Add(table);
+            return group;
         }
 
         Control BuildGeneralGroup()
@@ -272,6 +429,15 @@ namespace PinTop
             startup.AutoSize = true;
             startup.Checked = Startup.IsEnabled();
             flow.Controls.Add(startup);
+            flow.SetFlowBreak(startup, true);
+
+            var updates = new CheckBox();
+            updates.Text = "Avisarme si hay una versión nueva (consulta GitHub)";
+            updates.AutoSize = true;
+            updates.Checked = working.CheckUpdates;
+            updates.CheckedChanged += delegate { working.CheckUpdates = updates.Checked; };
+            flow.Controls.Add(updates);
+
             group.Controls.Add(flow);
             return group;
         }
@@ -296,7 +462,6 @@ namespace PinTop
             link.LinkClicked += delegate { Process.Start("https://github.com/ivanbg111/PinTop"); };
             info.Controls.Add(link);
             error.AutoSize = true;
-            error.ForeColor = Color.Firebrick;
             info.Controls.Add(error);
             panel.Controls.Add(info);
 
@@ -349,23 +514,45 @@ namespace PinTop
                 if (duplicate)
                 {
                     state.Text = "Repetido";
-                    state.ForeColor = Color.Firebrick;
+                    state.ForeColor = dark ? ErrorDark : ErrorLight;
                     ok = false;
                 }
                 else if (!HotkeyWindow.IsAvailable(hk))
                 {
                     state.Text = "Ya la usa otra app";
-                    state.ForeColor = Color.Firebrick;
+                    state.ForeColor = dark ? ErrorDark : ErrorLight;
                     ok = false;
                 }
                 else
                 {
                     state.Text = "✓ Disponible";
-                    state.ForeColor = Color.SeaGreen;
+                    state.ForeColor = dark ? OkDark : OkLight;
                 }
             }
             save.Enabled = ok;
             error.Text = ok ? "" : "Corrige los atajos marcados en rojo para poder guardar.";
+            error.ForeColor = dark ? ErrorDark : ErrorLight;
+        }
+
+        Label Hint(string text)
+        {
+            var hint = new Label();
+            hint.AutoSize = true;
+            hint.MaximumSize = new Size(520, 0);
+            hint.ForeColor = dark ? Theme.DarkMuted : SystemColors.GrayText;
+            hint.Margin = new Padding(3, 6, 3, 0);
+            hint.Text = text;
+            hint.Tag = "hint";
+            return hint;
+        }
+
+        static Label Title(string text)
+        {
+            var label = new Label();
+            label.AutoSize = true;
+            label.Margin = new Padding(3, 6, 3, 2);
+            label.Text = text;
+            return label;
         }
 
         static GroupBox NewGroup(string title)
@@ -387,6 +574,40 @@ namespace PinTop
             flow.Dock = DockStyle.Fill;
             flow.FlowDirection = FlowDirection.LeftToRight;
             return flow;
+        }
+
+        /// <summary>Colores oscuros para toda la ventana (WinForms no los aplica solo).</summary>
+        static void ApplyDark(Control control)
+        {
+            if (control is Form || control is GroupBox || control is Panel || control is Label || control is CheckBox)
+            {
+                control.BackColor = Theme.DarkBack;
+                if (!(control is Label && (string)control.Tag == "hint")) control.ForeColor = Theme.DarkText;
+            }
+            var button = control as Button;
+            if (button != null)
+            {
+                button.FlatStyle = FlatStyle.Flat;
+                button.FlatAppearance.BorderColor = Theme.DarkBorder;
+                button.BackColor = Theme.DarkSurface;
+                button.ForeColor = Theme.DarkText;
+            }
+            if (control is TextBox || control is ComboBox || control is ListBox)
+            {
+                control.BackColor = Theme.DarkSurface;
+                control.ForeColor = Theme.DarkText;
+                var combo = control as ComboBox;
+                if (combo != null) combo.FlatStyle = FlatStyle.Flat;
+                var list = control as ListBox;
+                if (list != null) list.BorderStyle = BorderStyle.FixedSingle;
+            }
+            var link = control as LinkLabel;
+            if (link != null)
+            {
+                link.LinkColor = Color.FromArgb(120, 180, 255);
+                link.ActiveLinkColor = Color.FromArgb(160, 205, 255);
+            }
+            foreach (Control child in control.Controls) ApplyDark(child);
         }
     }
 }

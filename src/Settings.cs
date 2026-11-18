@@ -12,7 +12,8 @@ namespace PinTop
         TogglePin,
         OpacityDown,
         OpacityUp,
-        ToggleButton
+        ToggleButton,
+        Ghost
     }
 
     /// <summary>Combinación de teclas (modificadores MOD_* de Win32 + tecla virtual).</summary>
@@ -104,6 +105,17 @@ namespace PinTop
         /// <summary>true: botón en todas las ventanas visibles; false: solo en la activa y las fijadas.</summary>
         public bool AllWindows = true;
         public int ButtonSize = 24;   // px lógicos: 20, 24 o 28
+        /// <summary>Borde del color de acento alrededor de las ventanas fijadas.</summary>
+        public bool PinnedBorder = true;
+        /// <summary>Atenuar las ventanas fijadas cuando el ratón no está encima (desactivado por defecto).</summary>
+        public bool FadeEnabled = false;
+        public int FadePercent = 40;
+        /// <summary>Consultar en GitHub si hay una versión nueva.</summary>
+        public bool CheckUpdates = true;
+        /// <summary>Apps que se fijan solas al abrirse.</summary>
+        public readonly HashSet<string> AutoPinApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        /// <summary>Apps en las que nunca se muestra el botón.</summary>
+        public readonly HashSet<string> ExcludedApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         public readonly Dictionary<HotkeyAction, Hotkey> Hotkeys = new Dictionary<HotkeyAction, Hotkey>();
         /// <summary>Posición elegida a mano por app: distancia (px lógicos) del borde derecho de la ventana.</summary>
         public readonly Dictionary<string, int> Offsets = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -126,6 +138,7 @@ namespace PinTop
             s.Hotkeys[HotkeyAction.OpacityDown] = new Hotkey(ctrlAlt, (uint)Keys.PageDown);
             s.Hotkeys[HotkeyAction.OpacityUp] = new Hotkey(ctrlAlt, (uint)Keys.PageUp);
             s.Hotkeys[HotkeyAction.ToggleButton] = Hotkey.None;
+            s.Hotkeys[HotkeyAction.Ghost] = new Hotkey(ctrlAlt, (uint)Keys.G);
             return s;
         }
 
@@ -150,6 +163,12 @@ namespace PinTop
                     if (key == "ShowButton") s.ShowButton = value != "0";
                     else if (key == "AllWindows") s.AllWindows = value != "0";
                     else if (key == "ButtonSize" && int.TryParse(value, out number)) s.ButtonSize = Math.Max(16, Math.Min(32, number));
+                    else if (key == "PinnedBorder") s.PinnedBorder = value != "0";
+                    else if (key == "FadeEnabled") s.FadeEnabled = value != "0";
+                    else if (key == "FadePercent" && int.TryParse(value, out number)) s.FadePercent = Math.Max(10, Math.Min(90, number));
+                    else if (key == "CheckUpdates") s.CheckUpdates = value != "0";
+                    else if (key == "AutoPinApps") AddApps(s.AutoPinApps, value);
+                    else if (key == "ExcludedApps") AddApps(s.ExcludedApps, value);
                     else if (key.StartsWith("Hotkey."))
                     {
                         HotkeyAction action;
@@ -169,6 +188,12 @@ namespace PinTop
             lines.Add("ShowButton=" + (ShowButton ? "1" : "0"));
             lines.Add("AllWindows=" + (AllWindows ? "1" : "0"));
             lines.Add("ButtonSize=" + ButtonSize);
+            lines.Add("PinnedBorder=" + (PinnedBorder ? "1" : "0"));
+            lines.Add("FadeEnabled=" + (FadeEnabled ? "1" : "0"));
+            lines.Add("FadePercent=" + FadePercent);
+            lines.Add("CheckUpdates=" + (CheckUpdates ? "1" : "0"));
+            lines.Add("AutoPinApps=" + string.Join("|", new List<string>(AutoPinApps).ToArray()));
+            lines.Add("ExcludedApps=" + string.Join("|", new List<string>(ExcludedApps).ToArray()));
             foreach (KeyValuePair<HotkeyAction, Hotkey> pair in Hotkeys)
                 lines.Add("Hotkey." + pair.Key + "=" + pair.Value.Serialize());
             foreach (KeyValuePair<string, int> pair in Offsets)
@@ -183,15 +208,37 @@ namespace PinTop
             catch (UnauthorizedAccessException) { }
         }
 
+        static void AddApps(HashSet<string> set, string value)
+        {
+            foreach (string app in value.Split('|'))
+                if (app.Trim().Length > 0) set.Add(app.Trim());
+        }
+
         public Settings Clone()
         {
             var c = new Settings();
-            c.ShowButton = ShowButton;
-            c.AllWindows = AllWindows;
-            c.ButtonSize = ButtonSize;
-            foreach (KeyValuePair<HotkeyAction, Hotkey> pair in Hotkeys) c.Hotkeys[pair.Key] = pair.Value;
-            foreach (KeyValuePair<string, int> pair in Offsets) c.Offsets[pair.Key] = pair.Value;
+            c.CopyFrom(this);
             return c;
+        }
+
+        /// <summary>Copia todos los valores de <paramref name="other"/> en esta instancia.</summary>
+        public void CopyFrom(Settings other)
+        {
+            ShowButton = other.ShowButton;
+            AllWindows = other.AllWindows;
+            ButtonSize = other.ButtonSize;
+            PinnedBorder = other.PinnedBorder;
+            FadeEnabled = other.FadeEnabled;
+            FadePercent = other.FadePercent;
+            CheckUpdates = other.CheckUpdates;
+            Hotkeys.Clear();
+            foreach (KeyValuePair<HotkeyAction, Hotkey> pair in other.Hotkeys) Hotkeys[pair.Key] = pair.Value;
+            Offsets.Clear();
+            foreach (KeyValuePair<string, int> pair in other.Offsets) Offsets[pair.Key] = pair.Value;
+            AutoPinApps.Clear();
+            AutoPinApps.UnionWith(other.AutoPinApps);
+            ExcludedApps.Clear();
+            ExcludedApps.UnionWith(other.ExcludedApps);
         }
     }
 }

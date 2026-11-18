@@ -37,6 +37,13 @@ namespace PinTop
             return pid == OwnPid;
         }
 
+        public static string GetTitle(IntPtr hwnd)
+        {
+            var sb = new StringBuilder(256);
+            Native.GetWindowText(hwnd, sb, sb.Capacity);
+            return sb.ToString();
+        }
+
         public static string GetClassName(IntPtr hwnd)
         {
             var sb = new StringBuilder(256);
@@ -208,7 +215,7 @@ namespace PinTop
                 opacityTouched[hwnd] = layered;
             }
 
-            if (alpha == 255 && !opacityTouched[hwnd])
+            if (alpha == 255 && !opacityTouched[hwnd] && !ghosts.Contains(hwnd))
             {
                 // Volvemos a dejar la ventana exactamente como estaba.
                 Native.SetWindowLong(hwnd, Native.GWL_EXSTYLE, ex & ~Native.WS_EX_LAYERED);
@@ -220,15 +227,160 @@ namespace PinTop
             return Native.SetLayeredWindowAttributes(hwnd, 0, alpha, Native.LWA_ALPHA);
         }
 
+        // ─── Opacidad elegida por el usuario (la atenuación automática no la cambia) ───
+
+        static readonly Dictionary<IntPtr, byte> userOpacity = new Dictionary<IntPtr, byte>();
+
+        /// <summary>Opacidad que eligió el usuario para la ventana (aunque ahora esté atenuada).</summary>
+        public static byte GetUserOpacity(IntPtr hwnd)
+        {
+            byte alpha;
+            return userOpacity.TryGetValue(hwnd, out alpha) ? alpha : GetOpacity(hwnd);
+        }
+
+        /// <summary>
+        /// Apunta la opacidad actual como "la del usuario" si aún no la sabíamos. Hay que llamarlo
+        /// antes de atenuar una ventana; si no, la atenuación se confundiría con la opacidad elegida.
+        /// </summary>
+        public static byte RememberUserOpacity(IntPtr hwnd)
+        {
+            byte alpha;
+            if (!userOpacity.TryGetValue(hwnd, out alpha))
+            {
+                alpha = GetOpacity(hwnd);
+                userOpacity[hwnd] = alpha;
+            }
+            return alpha;
+        }
+
+        public static bool SetUserOpacity(IntPtr hwnd, byte alpha)
+        {
+            if (!SetOpacity(hwnd, alpha)) return false;
+            userOpacity[hwnd] = alpha;
+            return true;
+        }
+
+        // ─── Modo fantasma: los clics atraviesan la ventana ───
+
+        static readonly HashSet<IntPtr> ghosts = new HashSet<IntPtr>();
+        static readonly Dictionary<IntPtr, byte> opacityBeforeGhost = new Dictionary<IntPtr, byte>();
+        const byte GhostDefaultAlpha = 166;   // 65 %: si la ventana era opaca, se aclara para que se vea lo de debajo
+
+        public static bool IsGhost(IntPtr hwnd)
+        {
+            return ghosts.Contains(hwnd);
+        }
+
+        public static List<IntPtr> GhostWindows()
+        {
+            var result = new List<IntPtr>();
+            foreach (IntPtr hwnd in new List<IntPtr>(ghosts))
+            {
+                if (Native.IsWindow(hwnd)) result.Add(hwnd);
+                else { ghosts.Remove(hwnd); opacityBeforeGhost.Remove(hwnd); }
+            }
+            return result;
+        }
+
+        public static bool SetGhost(IntPtr hwnd, bool on)
+        {
+            if (on == ghosts.Contains(hwnd)) return true;
+            if (on)
+            {
+                byte before = GetUserOpacity(hwnd);
+                byte alpha = before == 255 ? GhostDefaultAlpha : before;
+                ghosts.Add(hwnd);   // antes de SetOpacity, para que mantenga WS_EX_LAYERED
+                if (!SetUserOpacity(hwnd, alpha))
+                {
+                    ghosts.Remove(hwnd);
+                    return false;
+                }
+                opacityBeforeGhost[hwnd] = before;
+                // Para atravesar los clics hace falta LAYERED + TRANSPARENT.
+                int ex = Native.GetWindowLong(hwnd, Native.GWL_EXSTYLE);
+                Native.SetWindowLong(hwnd, Native.GWL_EXSTYLE, ex | Native.WS_EX_LAYERED | Native.WS_EX_TRANSPARENT);
+            }
+            else
+            {
+                ghosts.Remove(hwnd);
+                int ex = Native.GetWindowLong(hwnd, Native.GWL_EXSTYLE);
+                Native.SetWindowLong(hwnd, Native.GWL_EXSTYLE, ex & ~Native.WS_EX_TRANSPARENT);
+                byte before;
+                if (!opacityBeforeGhost.TryGetValue(hwnd, out before)) before = 255;
+                opacityBeforeGhost.Remove(hwnd);
+                SetUserOpacity(hwnd, before);
+            }
+            return true;
+        }
+
+        // ─── Borde de color en las ventanas fijadas (Windows 11) ───
+
+        static readonly HashSet<IntPtr> bordered = new HashSet<IntPtr>();
+        static readonly HashSet<IntPtr> borderFailed = new HashSet<IntPtr>();
+        static int borderColor = -1;
+
+        /// <summary>Pone el borde a las ventanas de <paramref name="pinned"/> y se lo quita a las demás.</summary>
+        public static void SyncBorders(ICollection<IntPtr> pinned, bool enabled, Color color)
+        {
+            int colorref = color.R | (color.G << 8) | (color.B << 16);
+            if (colorref != borderColor)
+            {
+                borderColor = colorref;
+                bordered.Clear();   // cambió el acento: volver a pintar todas
+            }
+            if (enabled)
+            {
+                foreach (IntPtr hwnd in pinned)
+                {
+                    if (bordered.Contains(hwnd) || borderFailed.Contains(hwnd)) continue;
+                    int value = colorref;
+                    if (Native.DwmSetWindowAttribute(hwnd, Native.DWMWA_BORDER_COLOR, ref value, sizeof(int)) == 0)
+                        bordered.Add(hwnd);
+                    else
+                        borderFailed.Add(hwnd);   // Windows 10 o ventana que no lo admite: no reintentar
+                }
+            }
+            foreach (IntPtr hwnd in new List<IntPtr>(bordered))
+            {
+                if (enabled && pinned.Contains(hwnd) && Native.IsWindow(hwnd)) continue;
+                ResetBorder(hwnd);
+            }
+            foreach (IntPtr hwnd in new List<IntPtr>(borderFailed))
+                if (!pinned.Contains(hwnd)) borderFailed.Remove(hwnd);
+        }
+
+        static void ResetBorder(IntPtr hwnd)
+        {
+            bordered.Remove(hwnd);
+            if (!Native.IsWindow(hwnd)) return;
+            int value = unchecked((int)Native.DWMWA_COLOR_DEFAULT);
+            Native.DwmSetWindowAttribute(hwnd, Native.DWMWA_BORDER_COLOR, ref value, sizeof(int));
+        }
+
         /// <summary>Deja todas las ventanas tocadas como estaban (al cerrar la app).</summary>
         public static void RestoreAll()
         {
+            foreach (IntPtr hwnd in GhostWindows()) SetGhost(hwnd, false);
+            foreach (IntPtr hwnd in new List<IntPtr>(bordered)) ResetBorder(hwnd);
             UnpinAll();
             foreach (IntPtr hwnd in new List<IntPtr>(opacityTouched.Keys))
             {
                 if (Native.IsWindow(hwnd)) SetOpacity(hwnd, 255);
             }
             opacityTouched.Clear();
+            userOpacity.Clear();
+        }
+
+        /// <summary>Olvida lo que sabíamos de una ventana cerrada.</summary>
+        public static void Forget(IntPtr hwnd)
+        {
+            userOpacity.Remove(hwnd);
+            ghosts.Remove(hwnd);
+            opacityBeforeGhost.Remove(hwnd);
+            bordered.Remove(hwnd);
+            borderFailed.Remove(hwnd);
+            opacityTouched.Remove(hwnd);
+            pinnedByUs.Remove(hwnd);
         }
 
         static Native.RECT GetFrame(IntPtr hwnd)

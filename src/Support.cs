@@ -139,6 +139,108 @@ namespace PinTop
         {
             return IsDark(background) ? Color.FromArgb(240, 240, 240) : Color.FromArgb(28, 28, 28);
         }
+
+        // ─── Modo oscuro (sigue el tema de apps de Windows) ───
+
+        public static readonly Color DarkBack = Color.FromArgb(32, 32, 32);
+        public static readonly Color DarkSurface = Color.FromArgb(45, 45, 45);
+        public static readonly Color DarkBorder = Color.FromArgb(75, 75, 75);
+        public static readonly Color DarkText = Color.FromArgb(235, 235, 235);
+        public static readonly Color DarkMuted = Color.FromArgb(160, 160, 160);
+
+        public static bool AppsUseDark()
+        {
+            try
+            {
+                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))
+                {
+                    object v = key == null ? null : key.GetValue("AppsUseLightTheme");
+                    return v is int && (int)v == 0;
+                }
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        public static void UseDarkTitleBar(IntPtr hwnd, bool dark)
+        {
+            int value = dark ? 1 : 0;
+            Native.DwmSetWindowAttribute(hwnd, Native.DWMWA_USE_IMMERSIVE_DARK_MODE, ref value, sizeof(int));
+        }
+
+        /// <summary>Aplica colores oscuros a un menú si Windows está en modo oscuro.</summary>
+        public static void StyleMenu(ToolStripDropDown menu)
+        {
+            if (AppsUseDark())
+            {
+                menu.Renderer = new DarkMenuRenderer();
+                menu.ForeColor = DarkText;
+            }
+            else
+            {
+                menu.RenderMode = ToolStripRenderMode.ManagerRenderMode;
+                menu.ForeColor = SystemColors.MenuText;
+            }
+        }
+    }
+
+    internal sealed class DarkMenuRenderer : ToolStripProfessionalRenderer
+    {
+        public DarkMenuRenderer() : base(new DarkMenuColors()) { }
+
+        protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
+        {
+            e.TextColor = e.Item.Enabled ? Theme.DarkText : Theme.DarkMuted;
+            base.OnRenderItemText(e);
+        }
+
+        protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e)
+        {
+            e.ArrowColor = Theme.DarkText;
+            base.OnRenderArrow(e);
+        }
+
+        protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e)
+        {
+            // Marca de verificación dibujada a mano (la de serie es negra y no se ve).
+            Rectangle r = e.ImageRectangle;
+            using (var pen = new Pen(Theme.DarkText, 1.6f))
+            {
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                e.Graphics.DrawLines(pen, new[]
+                {
+                    new PointF(r.Left + r.Width * 0.2f, r.Top + r.Height * 0.52f),
+                    new PointF(r.Left + r.Width * 0.42f, r.Top + r.Height * 0.74f),
+                    new PointF(r.Left + r.Width * 0.8f, r.Top + r.Height * 0.28f)
+                });
+            }
+        }
+    }
+
+    internal sealed class DarkMenuColors : ProfessionalColorTable
+    {
+        static readonly Color Back = Color.FromArgb(43, 43, 43);
+        static readonly Color Hover = Color.FromArgb(65, 65, 65);
+        static readonly Color Line = Color.FromArgb(70, 70, 70);
+
+        public override Color ToolStripDropDownBackground { get { return Back; } }
+        public override Color ImageMarginGradientBegin { get { return Back; } }
+        public override Color ImageMarginGradientMiddle { get { return Back; } }
+        public override Color ImageMarginGradientEnd { get { return Back; } }
+        public override Color MenuBorder { get { return Line; } }
+        public override Color MenuItemBorder { get { return Hover; } }
+        public override Color MenuItemSelected { get { return Hover; } }
+        public override Color MenuItemSelectedGradientBegin { get { return Hover; } }
+        public override Color MenuItemSelectedGradientEnd { get { return Hover; } }
+        public override Color MenuItemPressedGradientBegin { get { return Hover; } }
+        public override Color MenuItemPressedGradientEnd { get { return Hover; } }
+        public override Color SeparatorDark { get { return Line; } }
+        public override Color SeparatorLight { get { return Line; } }
+        public override Color CheckBackground { get { return Back; } }
+        public override Color CheckSelectedBackground { get { return Hover; } }
+        public override Color CheckPressedBackground { get { return Hover; } }
     }
 
     /// <summary>Dibujo de la chincheta.</summary>

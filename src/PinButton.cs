@@ -29,6 +29,10 @@ namespace PinTop
 
         public event Action<PinButton> PinClicked;
         public event Action<PinButton, int> DragEnded;
+        /// <summary>Rueda del ratón sobre el botón (delta positivo = hacia arriba).</summary>
+        public event Action<PinButton, int> Wheel;
+
+        bool ghost;
 
         public PinButton()
         {
@@ -92,12 +96,13 @@ namespace PinTop
         /// detrás de <paramref name="insertAfter"/>: es decir, justo encima de su ventana. Así no
         /// flota por encima de otras ventanas que la tapen.
         /// </summary>
-        public void ShowAt(Rectangle bounds, bool isPinned, IntPtr insertAfter)
+        public void ShowAt(Rectangle bounds, bool isPinned, bool isGhost, IntPtr insertAfter)
         {
             if (dragging) return;
-            if (isPinned != pinned)
+            if (isPinned != pinned || isGhost != ghost)
             {
                 pinned = isPinned;
+                ghost = isGhost;
                 UpdateTooltip();
                 Invalidate();
             }
@@ -137,7 +142,8 @@ namespace PinTop
         {
             string action = pinned ? "Soltar ventana" : "Fijar encima de todo";
             if (hotkeyText.Length > 0) action += " (" + hotkeyText + ")";
-            tip.SetToolTip(this, action + "\nArrástralo para moverlo · Clic derecho: más opciones");
+            if (ghost) action = "Modo fantasma activo: los clics atraviesan esta ventana\n" + action;
+            tip.SetToolTip(this, action + "\nRueda: transparencia · Arrástralo para moverlo · Clic derecho: más opciones");
         }
 
         protected override void OnResize(EventArgs e)
@@ -157,8 +163,10 @@ namespace PinTop
             Color back, ink;
             if (pinned)
             {
-                back = hover ? Theme.Blend(accent, Color.White, 0.18f) : accent;
-                ink = Theme.InkFor(accent);
+                // En modo fantasma el acento se ve "lavado", para distinguirlo de un fijado normal.
+                Color fill = ghost ? Theme.Blend(accent, baseColor, 0.5f) : accent;
+                back = hover ? Theme.Blend(fill, Color.White, 0.18f) : fill;
+                ink = Theme.InkFor(fill);
             }
             else
             {
@@ -181,6 +189,15 @@ namespace PinTop
             base.OnMouseLeave(e);
             hover = false;
             Invalidate();
+        }
+
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            base.OnMouseWheel(e);
+            if (Wheel == null || e.Delta == 0) return;
+            // Una "muesca" de rueda son 120; algunos ratones mandan varias de golpe.
+            int notches = Math.Max(1, Math.Abs(e.Delta) / 120);
+            for (int i = 0; i < notches; i++) Wheel(this, e.Delta);
         }
 
         protected override void OnMouseDown(MouseEventArgs e)

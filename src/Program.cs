@@ -13,6 +13,9 @@ namespace PinTop
         {
             get
             {
+                // Solo para probar el aviso de actualización (modo diagnóstico).
+                string fake = Debug.Enabled ? Environment.GetEnvironmentVariable("PINTOP_FAKE_VERSION") : null;
+                if (!string.IsNullOrEmpty(fake)) return fake;
                 Version v = Assembly.GetExecutingAssembly().GetName().Version;
                 return v.Major + "." + v.Minor + "." + v.Build;
             }
