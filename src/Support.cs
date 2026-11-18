@@ -391,15 +391,28 @@ namespace PinTop
         [DllImport("user32.dll")]
         static extern bool DestroyIcon(IntPtr hIcon);
 
+        /// <summary>
+        /// Logo: cuadrado redondeado azul con degradado suave y chincheta blanca grande. Ocupa todo
+        /// el cuadrado (como los iconos modernos de Windows 11) para no verse "enano" a 16 px.
+        /// </summary>
         public static Bitmap Render(int size)
         {
             var bmp = new Bitmap(size, size, PixelFormat.Format32bppArgb);
             using (Graphics g = Graphics.FromImage(bmp))
-            using (var bg = new SolidBrush(Theme.Brand))
             {
                 g.SmoothingMode = SmoothingMode.AntiAlias;
-                g.FillEllipse(bg, 0.5f, 0.5f, size - 1.5f, size - 1.5f);
-                Glyphs.DrawPin(g, new RectangleF(0, 0, size, size), Color.White, true, 0.62f);
+                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                // A tamaños grandes, un pequeño margen como en los iconos de Windows.
+                float pad = size >= 48 ? size / 16f : 0f;
+                var r = new RectangleF(pad, pad, size - 2 * pad, size - 2 * pad);
+                Color top = Theme.Blend(Theme.Brand, Color.White, 0.22f);
+                Color bottom = Theme.Blend(Theme.Brand, Color.Black, 0.12f);
+                using (GraphicsPath path = Ui.Round(r, r.Width * 0.23f))
+                using (var bg = new LinearGradientBrush(new PointF(0, r.Top), new PointF(0, r.Bottom + 1), top, bottom))
+                    g.FillPath(bg, path);
+                // A tamaños pequeños la chincheta ocupa más para que se lea bien.
+                float fill = size <= 20 ? 0.86f : size <= 32 ? 0.8f : 0.72f;
+                Glyphs.DrawPin(g, r, Color.White, true, fill);
             }
             return bmp;
         }

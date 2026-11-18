@@ -28,6 +28,7 @@ namespace PinTop
         readonly Settings working;
         readonly List<string> runningApps;
         readonly Action<Settings> apply;
+        readonly Func<int> pinnedCount;
         readonly Dictionary<HotkeyAction, Hotkey> shownHotkeys = new Dictionary<HotkeyAction, Hotkey>();
         int pageIndex;
         Panel host;
@@ -35,11 +36,12 @@ namespace PinTop
         /// <summary>Se lanza si "Buscar actualizaciones" encuentra una versión nueva.</summary>
         public event Action<string> NewVersionFound;
 
-        public SettingsForm(Settings current, List<string> runningApps, Action<Settings> apply)
+        public SettingsForm(Settings current, List<string> runningApps, Action<Settings> apply, Func<int> pinnedCount)
         {
             working = current.Clone();
             this.runningApps = runningApps;
             this.apply = apply;
+            this.pinnedCount = pinnedCount;
             foreach (KeyValuePair<HotkeyAction, Hotkey> pair in working.Hotkeys) shownHotkeys[pair.Key] = pair.Value;
 
             Text = "Ajustes de PinTop";
@@ -134,6 +136,11 @@ namespace PinTop
         Page BuildGeneralPage()
         {
             var page = new Page("General");
+            int pinned = pinnedCount();
+            page.Add(new HeroCard("PinTop", "Fija cualquier ventana encima de todo",
+                "● Activo",
+                pinned == 1 ? "1 ventana fijada" : pinned + " ventanas fijadas",
+                "Versión " + Program.Version), Ui.S(18));
 
             var theme = new Segmented(working.ThemeMode, "Como Windows", "Claro", "Oscuro");
             theme.SelectedChanged += delegate
@@ -228,7 +235,7 @@ namespace PinTop
 
                 // Acompañante: teclas + botón de borrar, alineados a la derecha.
                 var strip = new Panel();
-                strip.BackColor = Palette.Current.Card;
+                strip.BackColor = Color.Transparent;   // hereda el fondo (y el resaltado) de la fila
                 strip.Size = new Size(box.Width + Ui.S(8) + clear.Width, box.Height);
                 box.Location = new Point(0, 0);
                 clear.Location = new Point(box.Right + Ui.S(8), (box.Height - clear.Height) / 2);

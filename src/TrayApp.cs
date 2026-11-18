@@ -969,7 +969,7 @@ namespace PinTop
                 return;
             }
             hotkeys.UnregisterAll();   // para poder capturar las combinaciones actuales en la ventana
-            settingsForm = new SettingsForm(settings, RunningApps(), ApplySettings);
+            settingsForm = new SettingsForm(settings, RunningApps(), ApplySettings, () => WindowManager.PinnedWindows().Count);
             settingsForm.NewVersionFound += OnNewVersion;
             Sync();
             settingsForm.FormClosed += delegate

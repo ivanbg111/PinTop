@@ -16,6 +16,8 @@ namespace PinTop
         public Color Accent, AccentHover, AccentPressed, AccentText;
         public Color ControlBack, ControlHover, ControlBorder, Keycap;
         public Color Danger, Success;
+        /// <summary>Tarjeta con el ratón encima, borde inferior de "relieve", baldosa de icono y menú lateral.</summary>
+        public Color CardHover, Elevation, Tile, TileGlyph, NavSelected;
 
         /// <summary>Paleta en uso por la ventana de ajustes.</summary>
         public static Palette Current = Create(false);
@@ -69,6 +71,22 @@ namespace PinTop
                 p.Success = Rgb(0x0F, 0x7B, 0x0F);
             }
             p.AccentText = Theme.InkFor(p.Accent);
+            if (dark)
+            {
+                p.CardHover = Rgb(0x32, 0x32, 0x32);
+                p.Elevation = Rgb(0x16, 0x16, 0x16);
+                p.Tile = Theme.Blend(p.Card, p.Accent, 0.2f);
+                p.TileGlyph = p.Accent;
+                p.NavSelected = Theme.Blend(p.Window, p.Accent, 0.16f);
+            }
+            else
+            {
+                p.CardHover = Rgb(0xF6, 0xF6, 0xF6);
+                p.Elevation = Rgb(0xD8, 0xD8, 0xD8);
+                p.Tile = Theme.Blend(p.Card, p.Accent, 0.13f);
+                p.TileGlyph = p.Accent;
+                p.NavSelected = Theme.Blend(p.Window, p.Accent, 0.12f);
+            }
             return p;
         }
 
@@ -139,6 +157,28 @@ namespace PinTop
             }
         }
 
+        /// <summary>Color de fondo real de un control (saltando los transparentes).</summary>
+        public static Color SurfaceOf(Control c)
+        {
+            while (c != null && c.BackColor.A < 255) c = c.Parent;
+            return c != null ? c.BackColor : Palette.Current.Window;
+        }
+
+        /// <summary>
+        /// Tarjeta redondeada con "relieve": borde inferior un poco más oscuro, como las tarjetas
+        /// elevadas de Windows 11.
+        /// </summary>
+        public static void PaintCard(Graphics g, Rectangle bounds, Color outside, Color fill)
+        {
+            Palette p = Palette.Current;
+            g.Clear(outside);
+            float radius = S(8);
+            var shadow = new RectangleF(0.5f, 1.5f, bounds.Width - 1, bounds.Height - 2);
+            var card = new RectangleF(0.5f, 0.5f, bounds.Width - 1, bounds.Height - 2);
+            FillRound(g, shadow, radius, p.Elevation);
+            FillRound(g, card, radius, fill, p.CardBorder);
+        }
+
         public static void Text(Graphics g, string text, Font font, Rectangle r, Color color, TextFormatFlags flags)
         {
             TextRenderer.DrawText(g, text, font, r, color, flags | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding);
@@ -164,7 +204,7 @@ namespace PinTop
 
         protected Palette P { get { return Palette.Current; } }
 
-        protected Color Surface { get { return Parent != null ? Parent.BackColor : P.Window; } }
+        protected Color Surface { get { return Ui.SurfaceOf(Parent); } }
 
         protected override void OnMouseEnter(EventArgs e) { base.OnMouseEnter(e); hover = true; Invalidate(); }
         protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hover = false; pressed = false; Invalidate(); }
@@ -292,19 +332,20 @@ namespace PinTop
         {
             Graphics g = e.Graphics;
             g.Clear(Surface);
-            Ui.FillRound(g, new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), Ui.S(6), P.ControlBack, P.ControlBorder);
+            // Forma de "píldora": totalmente redondeado, con la opción elegida en otra píldora.
+            Ui.FillRound(g, new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), (Height - 1) / 2f, P.ControlBack, P.ControlBorder);
             for (int i = 0; i < items.Length; i++)
             {
                 var r = new Rectangle(Ui.S(3) + i * segment, Ui.S(3), segment, Height - Ui.S(6));
                 Color text = Enabled ? P.Text : P.Disabled;
                 if (i == selected)
                 {
-                    Ui.FillRound(g, r, Ui.S(4), Enabled ? P.Accent : P.Disabled);
+                    Ui.FillRound(g, r, r.Height / 2f, Enabled ? P.Accent : P.Disabled);
                     text = P.AccentText;
                 }
                 else if (i == hoverIndex && Enabled)
                 {
-                    Ui.FillRound(g, r, Ui.S(4), P.ControlHover);
+                    Ui.FillRound(g, r, r.Height / 2f, P.ControlHover);
                 }
                 Ui.Text(g, items[i], i == selected ? Ui.BodyStrong : Font, r, text,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
@@ -330,7 +371,7 @@ namespace PinTop
 
         void Fit()
         {
-            int width = Text.Length > 0 ? Ui.Measure(Text, Ui.Body).Width + Ui.S(32) : 0;
+            int width = Text.Length > 0 ? Ui.Measure(Text, Ui.Body).Width + Ui.S(40) : 0;
             if (glyph != null) width += Text.Length > 0 ? Ui.S(26) : Ui.S(34);
             Size = new Size(Math.Max(width, Ui.S(34)), Ui.S(34));
         }
@@ -353,13 +394,13 @@ namespace PinTop
             {
                 back = !Enabled ? P.Disabled : pressed ? P.AccentPressed : hover ? P.AccentHover : P.Accent;
                 ink = P.AccentText;
-                Ui.FillRound(g, r, Ui.S(4), back);
+                Ui.FillRound(g, r, r.Height / 2f, back);   // píldora
             }
             else
             {
                 back = pressed ? P.Pressed : hover && Enabled ? P.ControlHover : P.ControlBack;
                 ink = Enabled ? P.Text : P.Disabled;
-                Ui.FillRound(g, r, Ui.S(4), back, Focused ? P.Accent : P.ControlBorder);
+                Ui.FillRound(g, r, r.Height / 2f, back, Focused ? P.Accent : P.ControlBorder);
             }
 
             if (glyph != null && Text.Length == 0)
@@ -367,7 +408,7 @@ namespace PinTop
                 Ui.Text(g, glyph, Ui.IconSmall, ClientRectangle, ink, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
                 return;
             }
-            int x = Ui.S(16);
+            int x = Ui.S(20);
             if (glyph != null)
             {
                 Ui.Text(g, glyph, Ui.IconSmall, new Rectangle(x, 0, Ui.S(18), Height), ink, TextFormatFlags.VerticalCenter);
@@ -517,10 +558,10 @@ namespace PinTop
             Graphics g = e.Graphics;
             g.Clear(Surface);
             var box = new RectangleF(0.5f, 0.5f, Width - 1, Height - 1);
-            Ui.FillRound(g, box, Ui.S(4), hover ? P.ControlHover : P.ControlBack, Focused ? P.Accent : P.ControlBorder);
+            Ui.FillRound(g, box, Ui.S(8), hover ? P.ControlHover : P.ControlBack, Focused ? P.Accent : P.ControlBorder);
             if (Focused)
                 using (var brush = new SolidBrush(P.Accent))
-                    g.FillRectangle(brush, Ui.S(3), Height - Ui.S(2), Width - Ui.S(6), Ui.S(2));
+                    g.FillRectangle(brush, Ui.S(8), Height - Ui.S(2), Width - Ui.S(16), Ui.S(2));
 
             if (Focused && partial == null)
             {
@@ -548,7 +589,7 @@ namespace PinTop
             {
                 int w = Math.Max(Ui.S(26), Ui.Measure(part, Ui.BodyStrong).Width + Ui.S(16));
                 var cap = new Rectangle(x, (Height - capH) / 2, w, capH);
-                Ui.FillRound(g, cap, Ui.S(4), P.Keycap);
+                Ui.FillRound(g, cap, Ui.S(6), P.Keycap);
                 using (var pen = new Pen(P.ControlBorder))
                     g.DrawLine(pen, cap.Left + Ui.S(3), cap.Bottom, cap.Right - Ui.S(3), cap.Bottom);
                 Ui.Text(g, part, Ui.BodyStrong, cap, P.Text, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
@@ -581,6 +622,9 @@ namespace PinTop
             Invalidate();
         }
 
+        Timer hoverWatch;
+        bool hovered;
+
         public Row(string glyph, string title, string description, Control accessory)
         {
             this.glyph = glyph;
@@ -588,14 +632,63 @@ namespace PinTop
             this.description = description;
             this.accessory = accessory;
             DoubleBuffered = true;
+            ResizeRedraw = true;
             BackColor = Palette.Current.Card;
-            Height = Ui.S(description == null ? 60 : 70);
+            Height = Ui.S(description == null ? 64 : 74);
             if (accessory != null) Controls.Add(accessory);
         }
 
         public bool Dimmed;
 
-        int TextLeft { get { return glyph != null ? Ui.S(58) : Ui.S(20); } }
+        int TextLeft { get { return glyph != null ? Ui.S(72) : Ui.S(22); } }
+
+        // ─── Resaltado al pasar el ratón (también encima de los controles hijos) ───
+
+        protected override void OnMouseEnter(EventArgs e)
+        {
+            base.OnMouseEnter(e);
+            SetHover(true);
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            if (!ClientRectangle.Contains(PointToClient(Cursor.Position))) { SetHover(false); return; }
+            // El ratón ha pasado a un control hijo: vigilar hasta que salga de la fila.
+            if (hoverWatch == null)
+            {
+                hoverWatch = new Timer();
+                hoverWatch.Interval = 120;
+                hoverWatch.Tick += delegate
+                {
+                    if (IsDisposed || !ClientRectangle.Contains(PointToClient(Cursor.Position)))
+                    {
+                        hoverWatch.Stop();
+                        SetHover(false);
+                    }
+                };
+            }
+            hoverWatch.Start();
+        }
+
+        void SetHover(bool on)
+        {
+            if (hovered == on || IsDisposed) return;
+            hovered = on;
+            BackColor = on && !Dimmed ? Palette.Current.CardHover : Palette.Current.Card;   // los hijos lo heredan
+            Invalidate(true);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && hoverWatch != null) { hoverWatch.Stop(); hoverWatch.Dispose(); }
+            base.Dispose(disposing);
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            Ui.PaintCard(e.Graphics, ClientRectangle, Ui.SurfaceOf(Parent), BackColor);
+        }
 
         int TextWidth
         {
@@ -610,8 +703,8 @@ namespace PinTop
             if (description != null)
                 textHeight += Ui.S(2) + TextRenderer.MeasureText(description, Ui.Caption, new Size(TextWidth, 0),
                     TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding).Height;
-            int needed = Math.Max(accessory != null ? accessory.Height : 0, textHeight) + Ui.S(28);
-            Height = Math.Max(Ui.S(description == null ? 60 : 70), needed);
+            int needed = Math.Max(accessory != null ? accessory.Height : 0, textHeight) + Ui.S(32);
+            Height = Math.Max(Ui.S(description == null ? 64 : 74), needed);
             if (accessory != null) accessory.Top = (Height - accessory.Height) / 2;
         }
 
@@ -621,8 +714,14 @@ namespace PinTop
             Graphics g = e.Graphics;
             Color titleColor = Dimmed ? p.Disabled : p.Text;
             if (glyph != null)
-                Ui.Text(g, glyph, Ui.Icon, new Rectangle(Ui.S(20), 0, Ui.S(24), Height), Dimmed ? p.Disabled : p.Text,
-                    TextFormatFlags.VerticalCenter);
+            {
+                // Icono dentro de una baldosa redondeada teñida con el color de acento.
+                int tile = Ui.S(36);
+                var r = new Rectangle(Ui.S(20), (Height - tile) / 2, tile, tile);
+                Ui.FillRound(g, r, Ui.S(9), Dimmed ? p.Hover : p.Tile);
+                Ui.Text(g, glyph, Ui.Icon, r, Dimmed ? p.Disabled : p.TileGlyph,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            }
 
             bool hasDesc = !string.IsNullOrEmpty(description);
             int titleH = Ui.Measure(title, Ui.Body).Height;
@@ -636,15 +735,13 @@ namespace PinTop
         }
     }
 
-    /// <summary>Tarjeta redondeada que apila filas separadas por líneas finas.</summary>
+    /// <summary>Grupo de filas: cada fila es su propia tarjeta redondeada, con un pequeño hueco entre ellas.</summary>
     internal sealed class Card : Panel, IWidthAware
     {
         public Card()
         {
             DoubleBuffered = true;
-            ResizeRedraw = true;
-            BackColor = Palette.Current.Card;
-            Padding = new Padding(1);
+            BackColor = Palette.Current.Window;
         }
 
         public Card Add(Control row)
@@ -656,30 +753,17 @@ namespace PinTop
         public void FitWidth(int width)
         {
             Width = width;
-            int y = 1;
+            int y = 0;
             foreach (Control row in Controls)
             {
-                row.Left = 1;
+                row.Left = 0;
                 row.Top = y;
                 var aware = row as IWidthAware;
-                if (aware != null) aware.FitWidth(width - 2);
-                else row.Width = width - 2;
-                y += row.Height;
+                if (aware != null) aware.FitWidth(width);
+                else row.Width = width;
+                y += row.Height + Ui.S(5);
             }
-            Height = y + 1;
-            Invalidate();
-        }
-
-        protected override void OnPaintBackground(PaintEventArgs e)
-        {
-            Palette p = Palette.Current;
-            Graphics g = e.Graphics;
-            g.Clear(Parent != null ? Parent.BackColor : p.Window);
-            Ui.FillRound(g, new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), Ui.S(7), p.Card, p.CardBorder);
-            g.SmoothingMode = SmoothingMode.None;
-            using (var pen = new Pen(p.Divider))
-                for (int i = 1; i < Controls.Count; i++)
-                    g.DrawLine(pen, 1, Controls[i].Top - 1, Width - 2, Controls[i].Top - 1);
+            Height = Math.Max(1, y - Ui.S(5));
         }
     }
 
@@ -841,14 +925,108 @@ namespace PinTop
 
             for (int i = 0; i < labels.Length; i++)
             {
-                var r = new Rectangle(Ui.S(8), Top0 + i * ItemH + Ui.S(2), Width - Ui.S(16), ItemH - Ui.S(4));
-                if (i == selected || i == hoverIndex)
-                    Ui.FillRound(g, r, Ui.S(5), i == selected ? P.Hover : Theme.Blend(P.Window, P.Hover, 0.6f));
-                if (i == selected)
-                    Ui.FillRound(g, new RectangleF(r.Left, r.Top + r.Height / 2f - Ui.S(8), Ui.S(3), Ui.S(16)), Ui.S(1.5f), P.Accent);
-                Ui.Text(g, glyphs[i], Ui.Icon, new Rectangle(r.Left + Ui.S(14), r.Top, Ui.S(24), r.Height), P.Text, TextFormatFlags.VerticalCenter);
-                Ui.Text(g, labels[i], Ui.Body, new Rectangle(r.Left + Ui.S(48), r.Top, r.Width - Ui.S(52), r.Height), P.Text,
-                    TextFormatFlags.VerticalCenter);
+                var r = new Rectangle(Ui.S(10), Top0 + i * ItemH + Ui.S(2), Width - Ui.S(20), ItemH - Ui.S(4));
+                bool isSelected = i == selected;
+                // Sección elegida: píldora teñida con el acento y barrita de color; al pasar, gris suave.
+                if (isSelected) Ui.FillRound(g, r, r.Height / 2f, P.NavSelected);
+                else if (i == hoverIndex) Ui.FillRound(g, r, r.Height / 2f, Theme.Blend(P.Window, P.Hover, 0.8f));
+                if (isSelected)
+                    Ui.FillRound(g, new RectangleF(r.Left + Ui.S(4), r.Top + r.Height / 2f - Ui.S(8), Ui.S(3), Ui.S(16)), Ui.S(1.5f), P.Accent);
+                Ui.Text(g, glyphs[i], Ui.Icon, new Rectangle(r.Left + Ui.S(16), r.Top, Ui.S(24), r.Height),
+                    isSelected ? P.Accent : P.Text, TextFormatFlags.VerticalCenter);
+                Ui.Text(g, labels[i], isSelected ? Ui.BodyStrong : Ui.Body, new Rectangle(r.Left + Ui.S(50), r.Top, r.Width - Ui.S(54), r.Height),
+                    P.Text, TextFormatFlags.VerticalCenter);
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && logo != null) { logo.Dispose(); logo = null; }
+            base.Dispose(disposing);
+        }
+    }
+
+    /// <summary>
+    /// Tarjeta de cabecera con degradado del color de acento, logo grande, nombre y estado
+    /// (como la cabecera de "Sistema" en Configuración de Windows 11).
+    /// </summary>
+    internal sealed class HeroCard : ModernControl, IWidthAware
+    {
+        readonly string title, subtitle;
+        readonly string[] pills;
+        Bitmap logo;
+
+        public HeroCard(string title, string subtitle, params string[] pills)
+        {
+            this.title = title;
+            this.subtitle = subtitle;
+            this.pills = pills;
+            logo = Icons.Render(Ui.S(72));
+            Height = Ui.S(150);
+        }
+
+        public void FitWidth(int width)
+        {
+            Width = width;
+            Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.Clear(Surface);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+
+            Color baseColor = Theme.Accent();
+            Color start = Theme.Blend(baseColor, Color.White, 0.08f);
+            Color end = Theme.Blend(baseColor, Color.Black, 0.45f);
+            var r = new RectangleF(0, 0, Width - 1, Height - 1);
+            using (GraphicsPath path = Ui.Round(r, Ui.S(14)))
+            {
+                using (var brush = new LinearGradientBrush(new PointF(0, 0), new PointF(Width, Height), start, end))
+                    g.FillPath(brush, path);
+                // Marca de agua: chincheta grande y translúcida a la derecha, recortada por la tarjeta.
+                Region old = g.Clip;
+                g.SetClip(path);
+                using (var font = new Font(Ui.Icon.FontFamily, Ui.S(110), GraphicsUnit.Pixel))
+                using (var brush = new SolidBrush(Color.FromArgb(34, 255, 255, 255)))
+                    g.DrawString("", font, brush, Width - Ui.S(190), -Ui.S(6));
+                g.Clip = old;
+                // Brillo sutil arriba.
+                using (var pen = new Pen(Color.FromArgb(40, 255, 255, 255)))
+                    g.DrawPath(pen, path);
+            }
+
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            int logoSize = Ui.S(72);
+            int logoY = (Height - logoSize) / 2;
+            using (var shadow = new SolidBrush(Color.FromArgb(50, 0, 0, 0)))
+            using (GraphicsPath sp = Ui.Round(new RectangleF(Ui.S(28), logoY + Ui.S(4), logoSize, logoSize), logoSize * 0.23f))
+                g.FillPath(shadow, sp);
+            g.DrawImage(logo, Ui.S(28), logoY, logoSize, logoSize);
+
+            int x = Ui.S(28) + logoSize + Ui.S(22);
+            Color textColor = Color.White;
+            Color subColor = Theme.Blend(Color.White, end, 0.2f);
+            using (var brush = new SolidBrush(textColor))
+                g.DrawString(title, Ui.Title, brush, x - Ui.S(3), Ui.S(26));
+            using (var brush = new SolidBrush(subColor))
+                g.DrawString(subtitle, Ui.Body, brush, x, Ui.S(70));
+
+            // "Pastillas" de estado.
+            int px = x;
+            int py = Ui.S(102);
+            foreach (string pill in pills)
+            {
+                SizeF s = g.MeasureString(pill, Ui.Caption);
+                var pr = new RectangleF(px, py, s.Width + Ui.S(18), Ui.S(24));
+                using (GraphicsPath pp = Ui.Round(pr, pr.Height / 2f))
+                using (var bg = new SolidBrush(Color.FromArgb(46, 255, 255, 255)))
+                    g.FillPath(bg, pp);
+                using (var brush = new SolidBrush(Color.White))
+                    g.DrawString(pill, Ui.Caption, brush, pr.X + Ui.S(9), pr.Y + (pr.Height - s.Height) / 2f + 1);
+                px += (int)pr.Width + Ui.S(8);
             }
         }
 
@@ -874,6 +1052,7 @@ namespace PinTop
             this.target = target;
             this.runningApps = runningApps;
             this.changed = changed;
+            BackColor = Palette.Current.Card;   // fondo de la tarjeta (lo heredan los hijos)
             Controls.Add(add);
             add.Click += delegate { ShowAddMenu(); };
         }
@@ -974,7 +1153,7 @@ namespace PinTop
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
-            g.Clear(Surface);
+            Ui.PaintCard(g, ClientRectangle, Surface, BackColor);
             if (chips.Count == 0)
                 Ui.Text(g, "Ninguna app todavía", Font, new Rectangle(Ui.S(18), Ui.S(14), Width, Ui.S(32)), P.SubText,
                     TextFormatFlags.VerticalCenter);
